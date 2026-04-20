@@ -9,6 +9,7 @@
     <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-app-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-auth-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-functions-compat.js"></script>
     
     <!-- React -->
     <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
@@ -1213,13 +1214,14 @@
         
 
         // Initialize Firebase
-        let db, auth;
+        let db, auth, functions;
         try {
             if (!firebase.apps.length) {
                 firebase.initializeApp(firebaseConfig);
             }
             db = firebase.firestore();
             auth = firebase.auth();
+            functions = firebase.functions();
         } catch (error) {
             console.error("Firebase initialization error:", error);
         }
@@ -2081,23 +2083,56 @@
                 return `${h.toString().padStart(2, '0')}:${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
             };
 
+            const runLocationGatedCall = async (callableName, extraPayload) => {
+                let coords = null;
+                let geoDenied = false;
+                try {
+                    coords = await getGeolocationCoords();
+                } catch (geoErr) {
+                    if (geoErr && geoErr.code === 'GEOLOCATION_DENIED') geoDenied = true;
+                    // Fall through: server may still allow via IP allowlist
+                }
+
+                try {
+                    const fn = functions.httpsCallable(callableName);
+                    const result = await fn({ coords, ...extraPayload });
+                    return result.data;
+                } catch (err) {
+                    const detailCode = err && err.details && err.details.code;
+                    let text = err && err.message ? err.message : 'Request failed. Please try again.';
+                    if (detailCode === 'LOCATION_REQUIRED') {
+                        text = geoDenied
+                            ? 'You must be at the office to clock in/out. Please enable location access in your browser or connect to the office Wi-Fi.'
+                            : 'You must be at the office to clock in/out. Please allow location access or connect to the office Wi-Fi.';
+                    } else if (detailCode === 'LOCATION_OUTSIDE_RADIUS') {
+                        const d = err.details.distanceMeters;
+                        const r = err.details.radiusMeters;
+                        text = `You appear to be ${d} m from the office (allowed radius: ${r} m). Clock in/out is only available at the office.`;
+                    } else if (detailCode === 'ALREADY_CLOCKED_IN') {
+                        text = 'You are already clocked in.';
+                    } else if (detailCode === 'NOT_CLOCKED_IN') {
+                        text = 'No active punch to clock out of.';
+                    } else if (detailCode === 'SHIFT_TOO_SHORT') {
+                        text = 'Shift too short to log (under 1 minute).';
+                    }
+                    const richErr = new Error(text);
+                    richErr.userMessage = text;
+                    richErr.detailCode = detailCode || null;
+                    throw richErr;
+                }
+            };
+
             const handleClockIn = async () => {
                 if (punchLoading || activePunch) return;
                 setPunchLoading(true);
                 setPunchMessage(null);
                 try {
-                    const now = new Date();
-                    await db.collection('activePunches').doc(currentUser.uid).set({
-                        userId: currentUser.uid,
-                        userEmail: currentUser.email,
-                        userName: `${currentUser.firstName} ${currentUser.lastName}`,
-                        clockInAt: firebase.firestore.Timestamp.fromDate(now),
-                        clockInDate: now.toLocaleDateString('en-CA')
-                    });
+                    const clockInDate = new Date().toLocaleDateString('en-CA');
+                    await runLocationGatedCall('clockIn', { clockInDate });
                     setPunchMessage({ type: 'success', text: 'Clocked in. The timer is running.' });
-                } catch (error) {
-                    console.error('Clock in failed:', error);
-                    setPunchMessage({ type: 'error', text: 'Failed to clock in. Please try again.' });
+                } catch (err) {
+                    console.error('Clock in failed:', err);
+                    setPunchMessage({ type: 'error', text: err.userMessage || 'Failed to clock in. Please try again.' });
                 } finally {
                     setPunchLoading(false);
                 }
@@ -2105,43 +2140,15 @@
 
             const handleClockOut = async () => {
                 if (punchLoading || !activePunch) return;
-                const clockIn = getClockInDate();
-                if (!clockIn) {
-                    setPunchMessage({ type: 'error', text: 'Clock-in time unavailable. Try again in a moment.' });
-                    return;
-                }
                 setPunchLoading(true);
                 setPunchMessage(null);
                 try {
-                    const clockOut = new Date();
-                    const elapsedMs = clockOut.getTime() - clockIn.getTime();
-                    if (elapsedMs < 60 * 1000) {
-                        setPunchMessage({ type: 'error', text: 'Shift too short to log (under 1 minute).' });
-                        setPunchLoading(false);
-                        return;
-                    }
-                    const hours = elapsedMs / (1000 * 60 * 60);
-                    const startDecimal = clockIn.getHours() + clockIn.getMinutes() / 60;
-                    let endDecimal = clockOut.getHours() + clockOut.getMinutes() / 60;
-                    if (endDecimal <= startDecimal) endDecimal = startDecimal + hours;
-
-                    await db.collection('timeEntries').add({
-                        userId: currentUser.uid,
-                        userEmail: currentUser.email,
-                        userName: `${currentUser.firstName} ${currentUser.lastName}`,
-                        date: activePunch.clockInDate,
-                        startTime: startDecimal,
-                        endTime: endDecimal,
-                        hours: hours,
-                        status: 'pending',
-                        source: 'clock',
-                        submittedAt: firebase.firestore.FieldValue.serverTimestamp()
-                    });
-                    await db.collection('activePunches').doc(currentUser.uid).delete();
-                    setPunchMessage({ type: 'success', text: `Clocked out. Logged ${formatHoursWorked(hours)} for review.` });
-                } catch (error) {
-                    console.error('Clock out failed:', error);
-                    setPunchMessage({ type: 'error', text: 'Failed to clock out. Please try again.' });
+                    const result = await runLocationGatedCall('clockOut', {});
+                    const hoursStr = result && typeof result.hours === 'number' ? formatHoursWorked(result.hours) : 'your shift';
+                    setPunchMessage({ type: 'success', text: `Clocked out. Logged ${hoursStr} for review.` });
+                } catch (err) {
+                    console.error('Clock out failed:', err);
+                    setPunchMessage({ type: 'error', text: err.userMessage || 'Failed to clock out. Please try again.' });
                 } finally {
                     setPunchLoading(false);
                 }
@@ -4559,6 +4566,31 @@
         };
 
         // ============================================
+        // GEOLOCATION HELPER
+        // ============================================
+        const getGeolocationCoords = () => new Promise((resolve, reject) => {
+            if (!navigator.geolocation) {
+                reject({ code: 'GEOLOCATION_UNSUPPORTED', message: 'Your browser does not support geolocation.' });
+                return;
+            }
+            navigator.geolocation.getCurrentPosition(
+                (pos) => resolve({
+                    lat: pos.coords.latitude,
+                    lng: pos.coords.longitude,
+                    accuracy: pos.coords.accuracy
+                }),
+                (err) => {
+                    let code = 'GEOLOCATION_ERROR';
+                    if (err && err.code === err.PERMISSION_DENIED) code = 'GEOLOCATION_DENIED';
+                    else if (err && err.code === err.POSITION_UNAVAILABLE) code = 'GEOLOCATION_UNAVAILABLE';
+                    else if (err && err.code === err.TIMEOUT) code = 'GEOLOCATION_TIMEOUT';
+                    reject({ code, message: (err && err.message) || 'Failed to obtain location.' });
+                },
+                { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 }
+            );
+        });
+
+        // ============================================
         // AUTO CLOCK-OUT HELPER
         // If a user forgets to clock out, after 6:00 PM local on the clock-in date
         // we auto-write the time entry ending at 4:30 PM and clear the active punch.
@@ -4587,20 +4619,13 @@
             const endDecimal = AUTO_CUTOFF_END_HOUR + AUTO_CUTOFF_END_MINUTE / 60;
 
             try {
-                await db.collection('timeEntries').add({
-                    userId: uid,
-                    userEmail: punchData.userEmail,
-                    userName: punchData.userName,
+                const fn = functions.httpsCallable('autoClockOut');
+                await fn({
                     date: punchData.clockInDate,
-                    startTime: startDecimal,
-                    endTime: endDecimal,
-                    hours: hours,
-                    status: 'pending',
-                    source: 'clock',
-                    autoClockOut: true,
-                    submittedAt: firebase.firestore.FieldValue.serverTimestamp()
+                    startDecimal,
+                    endDecimal,
+                    hours
                 });
-                await db.collection('activePunches').doc(uid).delete();
                 return true;
             } catch (err) {
                 console.error('Auto clock-out failed:', err);
