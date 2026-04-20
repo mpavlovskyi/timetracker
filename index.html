@@ -579,6 +579,96 @@
             margin-bottom: 1.5rem;
         }
 
+        /* Clock In / Clock Out Punch Panel */
+        .punch-panel {
+            padding: 2rem;
+            text-align: center;
+            border-bottom: 1px solid var(--border-light);
+            margin-bottom: 1.5rem;
+        }
+
+        .punch-status {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.5rem;
+            padding: 0.5rem 1rem;
+            border-radius: 999px;
+            font-weight: 600;
+            font-size: 0.85rem;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            margin-bottom: 1rem;
+        }
+
+        .punch-status.in {
+            background: var(--success-light);
+            color: var(--success);
+        }
+
+        .punch-status.out {
+            background: var(--border-light);
+            color: var(--text-secondary);
+        }
+
+        .punch-status-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: currentColor;
+        }
+
+        .punch-status.in .punch-status-dot {
+            animation: pulse-dot 1.5s ease-in-out infinite;
+        }
+
+        @keyframes pulse-dot {
+            0%, 100% { opacity: 1; transform: scale(1); }
+            50% { opacity: 0.4; transform: scale(1.3); }
+        }
+
+        .punch-elapsed {
+            font-family: 'Fraunces', serif;
+            font-size: 3rem;
+            font-weight: 700;
+            color: var(--success);
+            margin: 0.5rem 0 0.5rem;
+            letter-spacing: -0.02em;
+            font-variant-numeric: tabular-nums;
+        }
+
+        .punch-meta {
+            font-size: 0.95rem;
+            color: var(--text-secondary);
+            margin-bottom: 1.5rem;
+        }
+
+        .btn-punch {
+            min-width: 240px;
+            font-size: 1.05rem;
+            padding: 1rem 2rem;
+        }
+
+        .punch-divider {
+            display: flex;
+            align-items: center;
+            gap: 1rem;
+            color: var(--text-light);
+            font-size: 0.8rem;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.8px;
+            margin: 0 auto 1.5rem;
+            max-width: 500px;
+        }
+
+        .punch-divider::before,
+        .punch-divider::after {
+            content: '';
+            flex: 1;
+            height: 1px;
+            background: var(--border);
+        }
+
         /* Table Styles */
         .data-table {
             width: 100%;
@@ -886,22 +976,218 @@
             margin: 1rem 0;
         }
 
+        /* Mobile menu toggle (hamburger) */
+        .mobile-menu-toggle {
+            display: none;
+            position: fixed;
+            top: 0.75rem;
+            left: 0.75rem;
+            z-index: 200;
+            width: 44px;
+            height: 44px;
+            align-items: center;
+            justify-content: center;
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            box-shadow: var(--shadow-md);
+            cursor: pointer;
+            padding: 0;
+        }
+
+        .mobile-menu-toggle .bar {
+            display: block;
+            width: 20px;
+            height: 2px;
+            background: var(--text-primary);
+            position: relative;
+        }
+
+        .mobile-menu-toggle .bar::before,
+        .mobile-menu-toggle .bar::after {
+            content: '';
+            position: absolute;
+            left: 0;
+            width: 20px;
+            height: 2px;
+            background: var(--text-primary);
+            transition: transform 0.2s ease;
+        }
+
+        .mobile-menu-toggle .bar::before { top: -6px; }
+        .mobile-menu-toggle .bar::after { top: 6px; }
+
+        .mobile-menu-toggle.open .bar { background: transparent; }
+        .mobile-menu-toggle.open .bar::before { transform: translateY(6px) rotate(45deg); }
+        .mobile-menu-toggle.open .bar::after { transform: translateY(-6px) rotate(-45deg); }
+
+        .sidebar-backdrop {
+            display: none;
+            position: fixed;
+            inset: 0;
+            background: rgba(10, 30, 60, 0.45);
+            z-index: 99;
+            animation: fadeIn 0.2s ease;
+        }
+
+        @keyframes fadeIn {
+            from { opacity: 0; }
+            to { opacity: 1; }
+        }
+
         /* Responsive */
         @media (max-width: 768px) {
+            .mobile-menu-toggle {
+                display: flex;
+            }
+
             .sidebar {
                 transform: translateX(-100%);
+                transition: transform 0.3s ease;
+                width: min(280px, 85vw);
+            }
+
+            .sidebar.open {
+                transform: translateX(0);
+            }
+
+            .sidebar-backdrop.open {
+                display: block;
             }
 
             .main-content {
                 margin-left: 0;
             }
 
+            .main-header {
+                padding: 1rem 1rem 1rem 4.25rem;
+                position: sticky;
+            }
+
+            .main-header h1 {
+                font-size: 1.35rem;
+            }
+
+            .main-header p {
+                font-size: 0.85rem;
+            }
+
+            .main-body {
+                padding: 1rem;
+            }
+
+            .content-card {
+                padding: 1rem;
+                border-radius: 14px;
+            }
+
+            .card-header {
+                flex-wrap: wrap;
+                gap: 0.5rem;
+            }
+
+            .card-title {
+                font-size: 1.15rem;
+            }
+
             .dashboard-grid {
                 grid-template-columns: 1fr;
+                gap: 0.75rem;
+            }
+
+            .stat-card {
+                padding: 1rem;
+            }
+
+            .stat-value {
+                font-size: 1.6rem;
             }
 
             .time-inputs {
                 grid-template-columns: 1fr;
+            }
+
+            .current-time {
+                font-size: 2.5rem;
+            }
+
+            .current-date {
+                font-size: 0.95rem;
+                margin-bottom: 1rem;
+            }
+
+            .clock-widget {
+                padding: 1rem;
+            }
+
+            .punch-elapsed {
+                font-size: 2.25rem;
+            }
+
+            .punch-panel {
+                padding: 1rem;
+            }
+
+            .btn-punch {
+                min-width: 100%;
+                width: 100%;
+            }
+
+            /* Horizontal scroll for tables on narrow screens */
+            .data-table {
+                display: block;
+                overflow-x: auto;
+                -webkit-overflow-scrolling: touch;
+                white-space: nowrap;
+                font-size: 0.85rem;
+            }
+
+            .data-table th,
+            .data-table td {
+                padding: 0.625rem 0.75rem;
+            }
+
+            .login-box {
+                padding: 2rem 1.5rem;
+                border-radius: 20px;
+            }
+
+            .login-logo h1 {
+                font-size: 2rem;
+            }
+
+            .login-logo {
+                margin-bottom: 1.75rem;
+            }
+
+            .login-content {
+                padding: 1rem;
+            }
+        }
+
+        @media (max-width: 480px) {
+            .main-header h1 {
+                font-size: 1.2rem;
+            }
+
+            .current-time {
+                font-size: 2rem;
+            }
+
+            .punch-elapsed {
+                font-size: 1.85rem;
+            }
+
+            .stat-value {
+                font-size: 1.4rem;
+            }
+
+            .login-box {
+                padding: 1.5rem 1.25rem;
+            }
+
+            .login-logo h1 {
+                font-size: 1.75rem;
             }
         }
     </style>
@@ -1341,7 +1627,7 @@
         // ============================================
         // SIDEBAR COMPONENT
         // ============================================
-        const Sidebar = ({ currentUser, currentPage, onNavigate, onLogout }) => {
+        const Sidebar = ({ currentUser, currentPage, onNavigate, onLogout, open, onToggle, onClose }) => {
             const adminNavItems = [
                 { id: 'dashboard', label: 'Dashboard', icon: 'dashboard' },
                 { id: 'clock', label: 'Log Time', icon: 'clock' },
@@ -1353,7 +1639,8 @@
 
             const userNavItems = [
                 { id: 'dashboard', label: 'Dashboard', icon: 'dashboard' },
-                { id: 'clock', label: 'Time Clock', icon: 'clock' },
+                { id: 'punch', label: 'Clock In/Out', icon: 'clock' },
+                { id: 'clock', label: 'Log Time', icon: 'edit' },
                 { id: 'profile', label: 'My Profile', icon: 'user' },
                 { id: 'availability', label: 'My Availability', icon: 'calendar' },
             ];
@@ -1369,42 +1656,61 @@
                 }
             };
 
+            const handleNav = (id) => {
+                onNavigate(id);
+                if (onClose) onClose();
+            };
+
             return (
-                <div className="sidebar">
-                    <div className="sidebar-header">
-                        <div className="sidebar-logo">Time Tracker</div>
-                        <div className="sidebar-subtitle">Therappy Innovations Team</div>
-                    </div>
+                <>
+                    <button
+                        type="button"
+                        className={`mobile-menu-toggle ${open ? 'open' : ''}`}
+                        onClick={onToggle}
+                        aria-label={open ? 'Close menu' : 'Open menu'}
+                        aria-expanded={open}
+                    >
+                        <span className="bar"></span>
+                    </button>
 
-                    <div className="sidebar-nav">
-                        {navItems.map(item => (
-                            <div
-                                key={item.id}
-                                className={`nav-item ${currentPage === item.id ? 'active' : ''}`}
-                                onClick={() => onNavigate(item.id)}
-                            >
-                                <Icon name={item.icon} size={20} />
-                                <span>{item.label}</span>
-                            </div>
-                        ))}
-                    </div>
+                    {open && <div className="sidebar-backdrop open" onClick={onClose}></div>}
 
-                    <div className="sidebar-footer">
-                        <div className="user-profile">
-                            <div className="user-avatar">
-                                {currentUser.firstName?.charAt(0)}{currentUser.lastName?.charAt(0)}
-                            </div>
-                            <div className="user-info">
-                                <div className="user-name">{currentUser.firstName} {currentUser.lastName}</div>
-                                <div className="user-role">{currentUser.role}</div>
-                            </div>
+                    <div className={`sidebar ${open ? 'open' : ''}`}>
+                        <div className="sidebar-header">
+                            <div className="sidebar-logo">Time Tracker</div>
+                            <div className="sidebar-subtitle">Therappy Innovations Team</div>
                         </div>
-                        <button className="btn btn-secondary" onClick={handleLogout} style={{ width: '100%' }}>
-                            <Icon name="logout" size={18} />
-                            Sign Out
-                        </button>
+
+                        <div className="sidebar-nav">
+                            {navItems.map(item => (
+                                <div
+                                    key={item.id}
+                                    className={`nav-item ${currentPage === item.id ? 'active' : ''}`}
+                                    onClick={() => handleNav(item.id)}
+                                >
+                                    <Icon name={item.icon} size={20} />
+                                    <span>{item.label}</span>
+                                </div>
+                            ))}
+                        </div>
+
+                        <div className="sidebar-footer">
+                            <div className="user-profile">
+                                <div className="user-avatar">
+                                    {currentUser.firstName?.charAt(0)}{currentUser.lastName?.charAt(0)}
+                                </div>
+                                <div className="user-info">
+                                    <div className="user-name">{currentUser.firstName} {currentUser.lastName}</div>
+                                    <div className="user-role">{currentUser.role}</div>
+                                </div>
+                            </div>
+                            <button className="btn btn-secondary" onClick={handleLogout} style={{ width: '100%' }}>
+                                <Icon name="logout" size={18} />
+                                Sign Out
+                            </button>
+                        </div>
                     </div>
-                </div>
+                </>
             );
         };
 
@@ -1417,6 +1723,27 @@
             const [timeEntries, setTimeEntries] = useState([]);
             const [loading, setLoading] = useState(true);
             const [users, setUsers] = useState([]);
+            const [deletingId, setDeletingId] = useState(null);
+            const [entryMessage, setEntryMessage] = useState(null);
+
+            const handleDeleteEntry = async (entry) => {
+                if (entry.userId !== currentUser.uid) return;
+                if (entry.status === 'approved') return;
+                const label = `${new Date(entry.date + 'T00:00:00').toLocaleDateString()} (${formatHoursWorked(entry.hours)})`;
+                if (!window.confirm(`Delete this time entry for ${label}? This cannot be undone.`)) return;
+                setDeletingId(entry.id);
+                setEntryMessage(null);
+                try {
+                    await db.collection('timeEntries').doc(entry.id).delete();
+                    setEntryMessage({ type: 'success', text: 'Time entry deleted.' });
+                    setTimeout(() => setEntryMessage(null), 3000);
+                } catch (err) {
+                    console.error('Failed to delete entry:', err);
+                    setEntryMessage({ type: 'error', text: 'Failed to delete entry. Please try again.' });
+                } finally {
+                    setDeletingId(null);
+                }
+            };
 
             useEffect(() => {
                 const timer = setInterval(() => setCurrentTime(new Date()), 1000);
@@ -1628,6 +1955,13 @@
                                 <h2 className="card-title">Recent Time Entries {currentUser.role === 'admin' ? '(All Users)' : ''}</h2>
                             </div>
 
+                            {entryMessage && (
+                                <div className={`alert ${entryMessage.type}`} style={{ marginBottom: '1rem' }}>
+                                    <Icon name={entryMessage.type === 'success' ? 'checkCircle' : 'alertCircle'} size={20} />
+                                    {entryMessage.text}
+                                </div>
+                            )}
+
                             {displayEntries.length > 0 ? (
                                 <table className="data-table">
                                     <thead>
@@ -1638,6 +1972,7 @@
                                             <th>End Time</th>
                                             <th>Hours</th>
                                             <th>Status</th>
+                                            {currentUser.role !== 'admin' && <th style={{ width: '80px', textAlign: 'center' }}>Actions</th>}
                                         </tr>
                                     </thead>
                                     <tbody>
@@ -1662,6 +1997,30 @@
                                                         {entry.status}
                                                     </span>
                                                 </td>
+                                                {currentUser.role !== 'admin' && (
+                                                    <td style={{ textAlign: 'center' }}>
+                                                        {entry.status === 'approved' ? (
+                                                            <span
+                                                                title="Approved entries cannot be deleted"
+                                                                style={{ color: 'var(--text-light)', fontSize: '0.85rem' }}
+                                                            >—</span>
+                                                        ) : (
+                                                            <button
+                                                                type="button"
+                                                                className="icon-btn"
+                                                                onClick={() => handleDeleteEntry(entry)}
+                                                                disabled={deletingId === entry.id}
+                                                                title="Delete entry"
+                                                                style={{ color: 'var(--danger)' }}
+                                                            >
+                                                                {deletingId === entry.id
+                                                                    ? <div className="spinner" style={{ width: '16px', height: '16px' }} />
+                                                                    : <Icon name="trash" size={18} />
+                                                                }
+                                                            </button>
+                                                        )}
+                                                    </td>
+                                                )}
                                             </tr>
                                         ))}
                                     </tbody>
@@ -1675,6 +2034,205 @@
                                     <p style={{ fontSize: '0.9rem', color: 'var(--text-light)' }}>Start tracking your time using the Time Clock</p>
                                 </div>
                             )}
+                        </div>
+                    </div>
+                </div>
+            );
+        };
+
+
+        // ============================================
+        // CLOCK IN / CLOCK OUT COMPONENT
+        // ============================================
+        const ClockInOut = ({ currentUser }) => {
+            const [currentTime, setCurrentTime] = useState(new Date());
+            const [activePunch, setActivePunch] = useState(null);
+            const [punchLoading, setPunchLoading] = useState(false);
+            const [punchMessage, setPunchMessage] = useState(null);
+
+            useEffect(() => {
+                const timer = setInterval(() => setCurrentTime(new Date()), 1000);
+                return () => clearInterval(timer);
+            }, []);
+
+            useEffect(() => {
+                const unsub = db.collection('activePunches').doc(currentUser.uid)
+                    .onSnapshot(doc => {
+                        setActivePunch(doc.exists ? doc.data() : null);
+                    }, err => {
+                        console.error('activePunch listener error:', err);
+                    });
+                return () => unsub();
+            }, [currentUser.uid]);
+
+            const getClockInDate = () => {
+                if (!activePunch) return null;
+                const ts = activePunch.clockInAt;
+                if (!ts) return null;
+                return typeof ts.toDate === 'function' ? ts.toDate() : new Date(ts);
+            };
+
+            const formatElapsed = (ms) => {
+                if (ms < 0) ms = 0;
+                const totalSeconds = Math.floor(ms / 1000);
+                const h = Math.floor(totalSeconds / 3600);
+                const m = Math.floor((totalSeconds % 3600) / 60);
+                const s = totalSeconds % 60;
+                return `${h.toString().padStart(2, '0')}:${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
+            };
+
+            const handleClockIn = async () => {
+                if (punchLoading || activePunch) return;
+                setPunchLoading(true);
+                setPunchMessage(null);
+                try {
+                    const now = new Date();
+                    await db.collection('activePunches').doc(currentUser.uid).set({
+                        userId: currentUser.uid,
+                        userEmail: currentUser.email,
+                        userName: `${currentUser.firstName} ${currentUser.lastName}`,
+                        clockInAt: firebase.firestore.Timestamp.fromDate(now),
+                        clockInDate: now.toLocaleDateString('en-CA')
+                    });
+                    setPunchMessage({ type: 'success', text: 'Clocked in. The timer is running.' });
+                } catch (error) {
+                    console.error('Clock in failed:', error);
+                    setPunchMessage({ type: 'error', text: 'Failed to clock in. Please try again.' });
+                } finally {
+                    setPunchLoading(false);
+                }
+            };
+
+            const handleClockOut = async () => {
+                if (punchLoading || !activePunch) return;
+                const clockIn = getClockInDate();
+                if (!clockIn) {
+                    setPunchMessage({ type: 'error', text: 'Clock-in time unavailable. Try again in a moment.' });
+                    return;
+                }
+                setPunchLoading(true);
+                setPunchMessage(null);
+                try {
+                    const clockOut = new Date();
+                    const elapsedMs = clockOut.getTime() - clockIn.getTime();
+                    if (elapsedMs < 60 * 1000) {
+                        setPunchMessage({ type: 'error', text: 'Shift too short to log (under 1 minute).' });
+                        setPunchLoading(false);
+                        return;
+                    }
+                    const hours = elapsedMs / (1000 * 60 * 60);
+                    const startDecimal = clockIn.getHours() + clockIn.getMinutes() / 60;
+                    let endDecimal = clockOut.getHours() + clockOut.getMinutes() / 60;
+                    if (endDecimal <= startDecimal) endDecimal = startDecimal + hours;
+
+                    await db.collection('timeEntries').add({
+                        userId: currentUser.uid,
+                        userEmail: currentUser.email,
+                        userName: `${currentUser.firstName} ${currentUser.lastName}`,
+                        date: activePunch.clockInDate,
+                        startTime: startDecimal,
+                        endTime: endDecimal,
+                        hours: hours,
+                        status: 'pending',
+                        source: 'clock',
+                        submittedAt: firebase.firestore.FieldValue.serverTimestamp()
+                    });
+                    await db.collection('activePunches').doc(currentUser.uid).delete();
+                    setPunchMessage({ type: 'success', text: `Clocked out. Logged ${formatHoursWorked(hours)} for review.` });
+                } catch (error) {
+                    console.error('Clock out failed:', error);
+                    setPunchMessage({ type: 'error', text: 'Failed to clock out. Please try again.' });
+                } finally {
+                    setPunchLoading(false);
+                }
+            };
+
+            return (
+                <div className="main-content">
+                    <div className="main-header">
+                        <h1>Clock In / Clock Out</h1>
+                        <p>Punch in when you start, punch out when you're done</p>
+                    </div>
+
+                    <div className="main-body">
+                        <div className="content-card">
+                            <div className="clock-widget">
+                                <div className="current-time">
+                                    {currentTime.toLocaleTimeString('en-US', {
+                                        hour: '2-digit',
+                                        minute: '2-digit',
+                                        hour12: true
+                                    })}
+                                </div>
+                                <div className="current-date">
+                                    {formatDate(currentTime)}
+                                </div>
+
+                                <div className="punch-panel" style={{ borderBottom: 'none', marginBottom: 0 }}>
+                                    {activePunch ? (
+                                        <>
+                                            <div className="punch-status in">
+                                                <span className="punch-status-dot"></span>
+                                                Clocked In
+                                            </div>
+                                            <div className="punch-elapsed">
+                                                {formatElapsed(currentTime.getTime() - (getClockInDate()?.getTime() ?? currentTime.getTime()))}
+                                            </div>
+                                            <div className="punch-meta">
+                                                Started at {getClockInDate()?.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: true })}
+                                                {activePunch.clockInDate && activePunch.clockInDate !== currentTime.toLocaleDateString('en-CA') && (
+                                                    <> on {new Date(activePunch.clockInDate + 'T00:00:00').toLocaleDateString()}</>
+                                                )}
+                                            </div>
+                                            <button
+                                                type="button"
+                                                className="btn btn-danger btn-punch"
+                                                onClick={handleClockOut}
+                                                disabled={punchLoading}
+                                            >
+                                                {punchLoading ? (
+                                                    <><div className="spinner"></div>Clocking out...</>
+                                                ) : (
+                                                    <><Icon name="clock" size={20} />Clock Out</>
+                                                )}
+                                            </button>
+                                        </>
+                                    ) : (
+                                        <>
+                                            <div className="punch-status out">
+                                                <span className="punch-status-dot"></span>
+                                                Not Clocked In
+                                            </div>
+                                            <div className="punch-meta" style={{ marginTop: '0.75rem' }}>
+                                                Press Clock In to start tracking your shift in real time.
+                                                <br />
+                                                <span style={{ fontSize: '0.8rem', color: 'var(--text-light)' }}>
+                                                    If you forget to clock out, you'll be auto-clocked out at 4:30 PM after 6:00 PM.
+                                                </span>
+                                            </div>
+                                            <button
+                                                type="button"
+                                                className="btn btn-success btn-punch"
+                                                onClick={handleClockIn}
+                                                disabled={punchLoading}
+                                            >
+                                                {punchLoading ? (
+                                                    <><div className="spinner"></div>Clocking in...</>
+                                                ) : (
+                                                    <><Icon name="clock" size={20} />Clock In</>
+                                                )}
+                                            </button>
+                                        </>
+                                    )}
+
+                                    {punchMessage && (
+                                        <div className={`alert ${punchMessage.type}`} style={{ marginTop: '1.25rem' }}>
+                                            <Icon name={punchMessage.type === 'success' ? 'checkCircle' : 'alertCircle'} size={20} />
+                                            {punchMessage.text}
+                                        </div>
+                                    )}
+                                </div>
+                            </div>
                         </div>
                     </div>
                 </div>
@@ -1755,10 +2313,10 @@
                         <div className="content-card">
                             <div className="clock-widget">
                                 <div className="current-time">
-                                    {currentTime.toLocaleTimeString('en-US', { 
-                                        hour: '2-digit', 
+                                    {currentTime.toLocaleTimeString('en-US', {
+                                        hour: '2-digit',
                                         minute: '2-digit',
-                                        hour12: true 
+                                        hour12: true
                                     })}
                                 </div>
                                 <div className="current-date">
@@ -4001,6 +4559,56 @@
         };
 
         // ============================================
+        // AUTO CLOCK-OUT HELPER
+        // If a user forgets to clock out, after 6:00 PM local on the clock-in date
+        // we auto-write the time entry ending at 4:30 PM and clear the active punch.
+        // Skipped if the user clocked in at or after 4:30 PM (would produce a non-positive shift).
+        // ============================================
+        const AUTO_CUTOFF_HOUR = 18;         // 6:00 PM — when auto-cutoff fires
+        const AUTO_CUTOFF_END_HOUR = 16;     // 4:30 PM — recorded clock-out time
+        const AUTO_CUTOFF_END_MINUTE = 30;
+
+        const runAutoClockOutIfExpired = async (uid, punchData) => {
+            if (!punchData || !punchData.clockInAt || !punchData.clockInDate) return false;
+            const clockIn = typeof punchData.clockInAt.toDate === 'function'
+                ? punchData.clockInAt.toDate()
+                : new Date(punchData.clockInAt);
+
+            const [y, m, d] = punchData.clockInDate.split('-').map(Number);
+            const cutoffTrigger = new Date(y, m - 1, d, AUTO_CUTOFF_HOUR, 0, 0, 0);
+            const cutoffEnd = new Date(y, m - 1, d, AUTO_CUTOFF_END_HOUR, AUTO_CUTOFF_END_MINUTE, 0, 0);
+
+            if (Date.now() < cutoffTrigger.getTime()) return false;
+            if (clockIn.getTime() >= cutoffEnd.getTime()) return false;
+
+            const elapsedMs = cutoffEnd.getTime() - clockIn.getTime();
+            const hours = elapsedMs / (1000 * 60 * 60);
+            const startDecimal = clockIn.getHours() + clockIn.getMinutes() / 60;
+            const endDecimal = AUTO_CUTOFF_END_HOUR + AUTO_CUTOFF_END_MINUTE / 60;
+
+            try {
+                await db.collection('timeEntries').add({
+                    userId: uid,
+                    userEmail: punchData.userEmail,
+                    userName: punchData.userName,
+                    date: punchData.clockInDate,
+                    startTime: startDecimal,
+                    endTime: endDecimal,
+                    hours: hours,
+                    status: 'pending',
+                    source: 'clock',
+                    autoClockOut: true,
+                    submittedAt: firebase.firestore.FieldValue.serverTimestamp()
+                });
+                await db.collection('activePunches').doc(uid).delete();
+                return true;
+            } catch (err) {
+                console.error('Auto clock-out failed:', err);
+                return false;
+            }
+        };
+
+        // ============================================
         // MAIN APP COMPONENT
         // ============================================
         const App = () => {
@@ -4008,6 +4616,7 @@
             const [currentPage, setCurrentPage] = useState('dashboard');
             const [loading, setLoading] = useState(true);
             const [showPasswordChange, setShowPasswordChange] = useState(false);
+            const [sidebarOpen, setSidebarOpen] = useState(false);
 
             useEffect(() => {
                 // Check if Firebase is configured
@@ -4042,6 +4651,45 @@
 
                 return () => unsubscribe();
             }, []);
+
+            // Watch for an active punch while the user is signed in.
+            // Runs the cutoff check immediately, then schedules a timer for the 6:00 PM mark
+            // so it fires even if the user never navigates back to the Time Clock page.
+            useEffect(() => {
+                if (!currentUser) return;
+                const uid = currentUser.uid;
+                let cutoffTimeout = null;
+
+                const unsub = db.collection('activePunches').doc(uid)
+                    .onSnapshot(async doc => {
+                        if (cutoffTimeout) { clearTimeout(cutoffTimeout); cutoffTimeout = null; }
+                        if (!doc.exists) return;
+
+                        const data = doc.data();
+                        const deleted = await runAutoClockOutIfExpired(uid, data);
+                        if (deleted || !data.clockInDate) return;
+
+                        // Schedule a check at 6:00 PM on the clock-in date
+                        const [y, m, d] = data.clockInDate.split('-').map(Number);
+                        const trigger = new Date(y, m - 1, d, AUTO_CUTOFF_HOUR, 0, 0, 0).getTime();
+                        const msUntil = trigger - Date.now();
+                        if (msUntil > 0) {
+                            cutoffTimeout = setTimeout(async () => {
+                                try {
+                                    const latest = await db.collection('activePunches').doc(uid).get();
+                                    if (latest.exists) await runAutoClockOutIfExpired(uid, latest.data());
+                                } catch (e) {
+                                    console.error('Scheduled auto clock-out check failed:', e);
+                                }
+                            }, msUntil + 1000);
+                        }
+                    }, err => console.error('activePunch watcher error:', err));
+
+                return () => {
+                    unsub();
+                    if (cutoffTimeout) clearTimeout(cutoffTimeout);
+                };
+            }, [currentUser]);
 
             const handleLogin = (user) => {
                 setCurrentUser(user);
@@ -4095,13 +4743,16 @@
             if (showPasswordChange) {
                 return (
                     <div className="app-container">
-                        <Sidebar 
-                            currentUser={currentUser} 
+                        <Sidebar
+                            currentUser={currentUser}
                             currentPage={currentPage}
                             onNavigate={setCurrentPage}
                             onLogout={handleLogout}
+                            open={sidebarOpen}
+                            onToggle={() => setSidebarOpen(o => !o)}
+                            onClose={() => setSidebarOpen(false)}
                         />
-                        <PasswordChangeModal 
+                        <PasswordChangeModal
                             currentUser={currentUser}
                             onComplete={handlePasswordChangeComplete}
                         />
@@ -4111,15 +4762,22 @@
 
             return (
                 <div className="app-container">
-                    <Sidebar 
-                        currentUser={currentUser} 
+                    <Sidebar
+                        currentUser={currentUser}
                         currentPage={currentPage}
                         onNavigate={setCurrentPage}
                         onLogout={handleLogout}
+                        open={sidebarOpen}
+                        onToggle={() => setSidebarOpen(o => !o)}
+                        onClose={() => setSidebarOpen(false)}
                     />
 
                     {currentPage === 'dashboard' && (
                         <Dashboard currentUser={currentUser} />
+                    )}
+
+                    {currentPage === 'punch' && currentUser.role !== 'admin' && (
+                        <ClockInOut currentUser={currentUser} />
                     )}
 
                     {currentPage === 'clock' && (
