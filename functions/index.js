@@ -208,7 +208,7 @@ async function locationCheck({ uid, user, coords, rawRequest, action }) {
     });
     throw new HttpsError(
       'failed-precondition',
-      `You are ${Math.round(distance)} m from the office. You must be within ${Math.round(radius)} m to clock in.`,
+      `You are not at the Office! You must be there to clock in.`,
       { code: 'LOCATION_OUTSIDE_RADIUS', distanceMeters: Math.round(distance), radiusMeters: Math.round(radius) }
     );
   }
