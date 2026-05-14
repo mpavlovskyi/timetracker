@@ -3530,19 +3530,6 @@
                     alert('Failed to update entry');
                 }
             };
-            // Generate time options for edit modal
-            const timeOptions = [];
-            for (let h = 0; h < 24; h++) {
-                timeOptions.push({ value: h, label: formatTimeDisplay(h) });
-                timeOptions.push({ value: h + 0.5, label: formatTimeDisplay(h + 0.5) });
-            }
-            
-            const endTimeOptions = [];
-            for (let h = 0; h < 24; h++) {
-                endTimeOptions.push({ value: h + 0.5, label: formatTimeDisplay(h + 0.5) });
-                endTimeOptions.push({ value: h + 1, label: formatTimeDisplay(h + 1) });
-            }
-
             if (loading) return <LoadingScreen />;
 
             return (
@@ -3677,32 +3664,24 @@
                                     <div className="time-inputs">
                                         <div className="form-group">
                                             <label className="form-label">Start Time</label>
-                                            <select
-                                                className="form-select"
+                                            <input
+                                                type="time"
+                                                className="form-input"
                                                 value={editStart}
                                                 onChange={(e) => setEditStart(e.target.value)}
-                                            >
-                                                {timeOptions.map(opt => (
-                                                    <option key={opt.value} value={opt.value}>
-                                                        {opt.label}
-                                                    </option>
-                                                ))}
-                                            </select>
+                                                required
+                                            />
                                         </div>
 
                                         <div className="form-group">
                                             <label className="form-label">End Time</label>
-                                            <select
-                                                className="form-select"
+                                            <input
+                                                type="time"
+                                                className="form-input"
                                                 value={editEnd}
                                                 onChange={(e) => setEditEnd(e.target.value)}
-                                            >
-                                                {endTimeOptions.map(opt => (
-                                                    <option key={opt.value} value={opt.value}>
-                                                        {opt.label}
-                                                    </option>
-                                                ))}
-                                            </select>
+                                                required
+                                            />
                                         </div>
                                     </div>
 
