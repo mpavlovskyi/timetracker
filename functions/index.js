@@ -138,6 +138,26 @@ function localDateStringInTz(date, timeZone) {
   return fmt.format(date);
 }
 
+const DAY_NAMES = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
+
+function parseHHMMToDecimal(str) {
+  if (!str || typeof str !== 'string') return null;
+  const [h, m] = str.split(':').map(Number);
+  if (!isFinite(h) || !isFinite(m)) return null;
+  return h + m / 60;
+}
+
+// Looks up the user's scheduled end time (decimal hours) for the given YYYY-MM-DD.
+// Returns null if no schedule applies to that weekday.
+function getScheduleEndForDate(schedule, isoDate) {
+  if (!schedule || !isoDate) return null;
+  const [y, m, d] = isoDate.split('-').map(Number);
+  const dayIdx = new Date(Date.UTC(y, m - 1, d)).getUTCDay();
+  const cfg = schedule[DAY_NAMES[dayIdx]];
+  if (!cfg || !cfg.end) return null;
+  return parseHHMMToDecimal(cfg.end);
+}
+
 async function logAttempt(entry) {
   try {
     await db.collection('clockLogs').add({
@@ -266,6 +286,7 @@ exports.clockOut = onCall({ cors: ALLOWED_ORIGINS }, async (request) => {
   const uid = request.auth.uid;
   const data = request.data || {};
   const coords = data.coords || null;
+  const extendedTime = data.extendedTime === true;
 
   const user = await getUserDoc(uid);
   await locationCheck({ uid, user, coords, rawRequest: request.rawRequest, action: 'clockOut' });
@@ -285,87 +306,138 @@ exports.clockOut = onCall({ cors: ALLOWED_ORIGINS }, async (request) => {
     throw new HttpsError('failed-precondition', 'Shift too short to log (under 1 minute).', { code: 'SHIFT_TOO_SHORT' });
   }
 
-  const hours = elapsedMs / (1000 * 60 * 60);
+  const totalHours = elapsedMs / (1000 * 60 * 60);
   const tz = OFFICE_TIMEZONE.value();
   const startDecimal = timeDecimalInTz(clockIn, tz);
   let endDecimal = timeDecimalInTz(now, tz);
-  if (endDecimal <= startDecimal) endDecimal = startDecimal + hours;
+  if (endDecimal <= startDecimal) endDecimal = startDecimal + totalHours;
 
-  const entryRef = db.collection('timeEntries').doc();
-  const batch = db.batch();
-  batch.set(entryRef, {
+  const capEnabled = user.scheduleCapEnabled === true;
+  const capDecimal = capEnabled ? getScheduleEndForDate(user.schedule, punch.clockInDate) : null;
+  const pastCap = capDecimal !== null && endDecimal > capDecimal;
+
+  const entryBase = {
     userId: uid,
     userEmail: user.email,
     userName: `${user.firstName || ''} ${user.lastName || ''}`.trim(),
     date: punch.clockInDate,
-    startTime: startDecimal,
-    endTime: endDecimal,
-    hours,
     status: 'pending',
     source: 'clock',
     submittedAt: admin.firestore.FieldValue.serverTimestamp()
-  });
-  batch.delete(punchRef);
-  await batch.commit();
+  };
 
-  return { ok: true, hours, entryId: entryRef.id };
-});
-
-/**
- * autoClockOut: not location-gated — recovers a forgotten punch from anywhere.
- * Client computes the cutoff in the user's local timezone and passes the
- * resulting decimals. Server validates shape, ensures an active punch exists,
- * writes the entry with `autoClockOut: true`, and clears the punch.
- */
-exports.autoClockOut = onCall({ cors: ALLOWED_ORIGINS }, async (request) => {
-  if (!request.auth) {
-    throw new HttpsError('unauthenticated', 'Sign in required.');
-  }
-  const uid = request.auth.uid;
-  const data = request.data || {};
-  const { startDecimal, endDecimal, hours, date } = data;
-
-  if (typeof startDecimal !== 'number' || !isFinite(startDecimal)
-    || typeof endDecimal !== 'number' || !isFinite(endDecimal)
-    || typeof hours !== 'number' || !isFinite(hours)
-    || typeof date !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(date)) {
-    throw new HttpsError('invalid-argument', 'Invalid auto-clock-out payload.');
-  }
-  if (hours <= 0 || hours > 24) {
-    throw new HttpsError('invalid-argument', 'Invalid hours value.');
-  }
-
-  const user = await getUserDoc(uid);
-  const punchRef = db.collection('activePunches').doc(uid);
-  const punchSnap = await punchRef.get();
-  if (!punchSnap.exists) {
-    return { ok: false, reason: 'no-active-punch' };
-  }
-
-  const entryRef = db.collection('timeEntries').doc();
   const batch = db.batch();
-  batch.set(entryRef, {
-    userId: uid,
-    userEmail: user.email,
-    userName: `${user.firstName || ''} ${user.lastName || ''}`.trim(),
-    date,
-    startTime: startDecimal,
-    endTime: endDecimal,
-    hours,
-    status: 'pending',
-    source: 'clock',
-    autoClockOut: true,
-    submittedAt: admin.firestore.FieldValue.serverTimestamp()
-  });
+  let primaryEntryId = null;
+  let extraEntryId = null;
+
+  if (pastCap && extendedTime) {
+    // Split: normal portion up to cap, plus an EXTRA TIME entry for the overflow.
+    if (startDecimal < capDecimal) {
+      const normalRef = db.collection('timeEntries').doc();
+      batch.set(normalRef, {
+        ...entryBase,
+        startTime: startDecimal,
+        endTime: capDecimal,
+        hours: capDecimal - startDecimal
+      });
+      primaryEntryId = normalRef.id;
+    }
+    const extraRef = db.collection('timeEntries').doc();
+    const extraStart = Math.max(startDecimal, capDecimal);
+    batch.set(extraRef, {
+      ...entryBase,
+      startTime: extraStart,
+      endTime: endDecimal,
+      hours: endDecimal - extraStart,
+      isExtraTime: true
+    });
+    extraEntryId = extraRef.id;
+  } else if (pastCap) {
+    // Silent clamp to cap.
+    const entryRef = db.collection('timeEntries').doc();
+    const cappedEnd = Math.max(capDecimal, startDecimal);
+    batch.set(entryRef, {
+      ...entryBase,
+      startTime: startDecimal,
+      endTime: cappedEnd,
+      hours: Math.max(0, cappedEnd - startDecimal),
+      capped: true
+    });
+    primaryEntryId = entryRef.id;
+  } else {
+    const entryRef = db.collection('timeEntries').doc();
+    batch.set(entryRef, {
+      ...entryBase,
+      startTime: startDecimal,
+      endTime: endDecimal,
+      hours: totalHours
+    });
+    primaryEntryId = entryRef.id;
+  }
+
   batch.delete(punchRef);
   await batch.commit();
 
-  await logAttempt({
-    userId: uid, action: 'autoClockOut',
-    ip: getClientIp(request.rawRequest), ipAllowed: null,
-    coords: null, distanceMeters: null,
-    allowed: true, reason: 'auto-client-triggered', errorCode: null
-  });
-
-  return { ok: true, entryId: entryRef.id, hours };
+  return {
+    ok: true,
+    hours: totalHours,
+    entryId: primaryEntryId,
+    extraEntryId,
+    capped: pastCap && !extendedTime,
+    extraLogged: pastCap && extendedTime
+  };
 });
+
+// ---------------------------------------------------------------------------
+// TEMPORARY — remove after use.
+// Creates (or refreshes) a throwaway admin account so a developer who lacks
+// console access can sign in and smoke-test admin flows. Cleans up with the
+// same call passing { cleanup: true }. Delete this block + the function from
+// the project after you're done.
+// ---------------------------------------------------------------------------
+const DEV_RESET_SECRET = 'b4f1a9c0-7e2d-4836-9c51-08af3d6e7b29';
+const DEV_ADMIN_EMAIL = 'temp-admin@timetracker.local';
+
+exports.devCreateTempAdmin = onCall({ cors: ALLOWED_ORIGINS }, async (request) => {
+  const { secret, cleanup } = request.data || {};
+  if (secret !== DEV_RESET_SECRET) {
+    throw new HttpsError('permission-denied', 'Invalid secret.');
+  }
+
+  if (cleanup) {
+    try {
+      const existing = await admin.auth().getUserByEmail(DEV_ADMIN_EMAIL);
+      await admin.auth().deleteUser(existing.uid);
+      await db.collection('users').doc(existing.uid).delete();
+      return { ok: true, action: 'cleanup', uid: existing.uid };
+    } catch (err) {
+      if (err.code === 'auth/user-not-found') return { ok: true, action: 'cleanup', note: 'no temp admin found' };
+      throw new HttpsError('internal', err.message);
+    }
+  }
+
+  const password = 'Temp-' + Math.random().toString(36).slice(2, 10) + '-' + Math.random().toString(36).slice(2, 6);
+
+  let userRecord;
+  try {
+    userRecord = await admin.auth().createUser({ email: DEV_ADMIN_EMAIL, password });
+  } catch (err) {
+    if (err.code === 'auth/email-already-exists') {
+      userRecord = await admin.auth().getUserByEmail(DEV_ADMIN_EMAIL);
+      await admin.auth().updateUser(userRecord.uid, { password });
+    } else {
+      throw new HttpsError('internal', err.message);
+    }
+  }
+
+  await db.collection('users').doc(userRecord.uid).set({
+    email: DEV_ADMIN_EMAIL,
+    username: 'tempadmin',
+    firstName: 'Temp',
+    lastName: 'Admin',
+    role: 'admin'
+  }, { merge: true });
+
+  return { ok: true, action: 'created', email: DEV_ADMIN_EMAIL, password, uid: userRecord.uid };
+});
+

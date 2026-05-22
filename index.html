@@ -184,6 +184,16 @@
             box-shadow: 0 0 0 4px rgba(15, 76, 129, 0.1);
         }
 
+        .schedule-card .form-input[type="time"]::-webkit-calendar-picker-indicator {
+            display: none;
+            -webkit-appearance: none;
+        }
+        .schedule-card .form-input[type="time"] {
+            -webkit-appearance: none;
+            -moz-appearance: textfield;
+            appearance: none;
+        }
+
         .btn {
             padding: 0.875rem 1.5rem;
             border: none;
@@ -1303,6 +1313,36 @@
             return `${hours}h ${minutes}min`;
         };
 
+        // Work schedule helpers
+        const SCHEDULE_DAYS = [
+            { key: 'monday',    label: 'Monday' },
+            { key: 'tuesday',   label: 'Tuesday' },
+            { key: 'wednesday', label: 'Wednesday' },
+            { key: 'thursday',  label: 'Thursday' },
+            { key: 'friday',    label: 'Friday' }
+        ];
+
+        const scheduleDayKeyForDate = (date) => {
+            const idx = date.getDay(); // 0 = Sunday
+            return ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'][idx];
+        };
+
+        const getScheduleForToday = (schedule, date = new Date()) => {
+            if (!schedule) return null;
+            const cfg = schedule[scheduleDayKeyForDate(date)];
+            if (!cfg || !cfg.start || !cfg.end) return null;
+            return cfg;
+        };
+
+        const formatScheduleTime = (hhmm) => {
+            if (!hhmm) return '';
+            return formatTimeDisplay(timeToDecimal(hhmm));
+        };
+
+        const ExtraTimeBadge = () => (
+            <span style={{ marginLeft: '0.5rem', padding: '2px 8px', borderRadius: '999px', background: 'var(--warning-light, #fde68a)', color: 'var(--warning, #b45309)', fontSize: '0.7rem', fontWeight: 700, letterSpacing: '0.5px' }}>EXTRA TIME</span>
+        );
+
         // Icons Component
         const Icon = ({ name, size = 20 }) => {
             const icons = {
@@ -1644,7 +1684,7 @@
                 { id: 'punch', label: 'Clock In/Out', icon: 'clock' },
                 { id: 'clock', label: 'Log Time', icon: 'edit' },
                 { id: 'profile', label: 'My Profile', icon: 'user' },
-                { id: 'availability', label: 'My Availability', icon: 'calendar' },
+                { id: 'schedule', label: 'My Schedule', icon: 'calendar' },
             ];
 
             const navItems = currentUser.role === 'admin' ? adminNavItems : userNavItems;
@@ -1990,7 +2030,10 @@
                                                         </div>
                                                     </td>
                                                 )}
-                                                <td>{new Date(entry.date + 'T00:00:00').toLocaleDateString()}</td>
+                                                <td>
+                                                    {new Date(entry.date + 'T00:00:00').toLocaleDateString()}
+                                                    {entry.isExtraTime && <ExtraTimeBadge />}
+                                                </td>
                                                 <td>{formatTimeDisplay(entry.startTime)}</td>
                                                 <td>{formatTimeDisplay(entry.endTime)}</td>
                                                 <td><strong>{formatHoursWorked(entry.hours)}</strong></td>
@@ -2051,6 +2094,8 @@
             const [activePunch, setActivePunch] = useState(null);
             const [punchLoading, setPunchLoading] = useState(false);
             const [punchMessage, setPunchMessage] = useState(null);
+            const [schedule, setSchedule] = useState(currentUser.schedule || null);
+            const [capEnabled, setCapEnabled] = useState(currentUser.scheduleCapEnabled === true);
 
             useEffect(() => {
                 const timer = setInterval(() => setCurrentTime(new Date()), 1000);
@@ -2066,6 +2111,30 @@
                     });
                 return () => unsub();
             }, [currentUser.uid]);
+
+            useEffect(() => {
+                const unsub = db.collection('users').doc(currentUser.uid).onSnapshot(doc => {
+                    if (doc.exists) {
+                        const d = doc.data();
+                        setSchedule(d.schedule || null);
+                        setCapEnabled(d.scheduleCapEnabled === true);
+                    }
+                });
+                return () => unsub();
+            }, [currentUser.uid]);
+
+            // Cap for today's shift, anchored to the clock-in date if active
+            const todayShift = (() => {
+                if (!schedule || !capEnabled) return null;
+                const anchorDate = activePunch && activePunch.clockInDate
+                    ? new Date(activePunch.clockInDate + 'T00:00:00')
+                    : currentTime;
+                return getScheduleForToday(schedule, anchorDate);
+            })();
+
+            const capDecimal = todayShift ? timeToDecimal(todayShift.end) : null;
+            const nowDecimal = currentTime.getHours() + currentTime.getMinutes() / 60 + currentTime.getSeconds() / 3600;
+            const pastCap = activePunch && capDecimal !== null && nowDecimal > capDecimal;
 
             const getClockInDate = () => {
                 if (!activePunch) return null;
@@ -2138,14 +2207,22 @@
                 }
             };
 
-            const handleClockOut = async () => {
+            const handleClockOut = async (extendedTime = false) => {
                 if (punchLoading || !activePunch) return;
                 setPunchLoading(true);
                 setPunchMessage(null);
                 try {
-                    const result = await runLocationGatedCall('clockOut', {});
-                    const hoursStr = result && typeof result.hours === 'number' ? formatHoursWorked(result.hours) : 'your shift';
-                    setPunchMessage({ type: 'success', text: `Clocked out. Logged ${hoursStr} for review.` });
+                    const result = await runLocationGatedCall('clockOut', { extendedTime });
+                    let text;
+                    if (result && result.extraLogged) {
+                        text = `Clocked out. Logged your shift plus extra time — both pending review.`;
+                    } else if (result && result.capped) {
+                        text = `Clocked out at your scheduled end time. If you worked past that, use Extended Time next time.`;
+                    } else {
+                        const hoursStr = result && typeof result.hours === 'number' ? formatHoursWorked(result.hours) : 'your shift';
+                        text = `Clocked out. Logged ${hoursStr} for review.`;
+                    }
+                    setPunchMessage({ type: 'success', text });
                 } catch (err) {
                     console.error('Clock out failed:', err);
                     setPunchMessage({ type: 'error', text: err.userMessage || 'Failed to clock out. Please try again.' });
@@ -2191,14 +2268,21 @@
                                                     <> on {new Date(activePunch.clockInDate + 'T00:00:00').toLocaleDateString()}</>
                                                 )}
                                             </div>
+                                            {pastCap && (
+                                                <div className="punch-meta" style={{ marginTop: '0.5rem', color: 'var(--warning, #d97706)', fontWeight: 600 }}>
+                                                    Past your scheduled end ({formatScheduleTime(todayShift.end)}) — clocking out now will log the overflow as EXTRA TIME pending approval.
+                                                </div>
+                                            )}
                                             <button
                                                 type="button"
                                                 className="btn btn-danger btn-punch"
-                                                onClick={handleClockOut}
+                                                onClick={() => handleClockOut(pastCap)}
                                                 disabled={punchLoading}
                                             >
                                                 {punchLoading ? (
                                                     <><div className="spinner"></div>Clocking out...</>
+                                                ) : pastCap ? (
+                                                    <><Icon name="clock" size={20} />Clock Out – Extended Time</>
                                                 ) : (
                                                     <><Icon name="clock" size={20} />Clock Out</>
                                                 )}
@@ -2212,10 +2296,6 @@
                                             </div>
                                             <div className="punch-meta" style={{ marginTop: '0.75rem' }}>
                                                 Press Clock In to start tracking your shift in real time.
-                                                <br />
-                                                <span style={{ fontSize: '0.8rem', color: 'var(--text-light)' }}>
-                                                    If you forget to clock out, you'll be auto-clocked out at 4:30 PM after 6:00 PM.
-                                                </span>
                                             </div>
                                             <button
                                                 type="button"
@@ -2627,6 +2707,14 @@
             const [timeEntries, setTimeEntries] = useState([]);
             const [users, setUsers] = useState([]);
             const [loading, setLoading] = useState(true);
+            const [liveUser, setLiveUser] = useState(currentUser);
+
+            useEffect(() => {
+                const unsub = db.collection('users').doc(currentUser.uid).onSnapshot(doc => {
+                    if (doc.exists) setLiveUser({ uid: doc.id, ...doc.data() });
+                });
+                return () => unsub();
+            }, [currentUser.uid]);
 
             useEffect(() => {
                 if (currentUser.role === 'admin') {
@@ -2883,7 +2971,10 @@
                                             <tbody>
                                                 {weekEntries.map((entry) => (
                                                     <tr key={entry.id}>
-                                                        <td>{new Date(entry.date + 'T00:00:00').toLocaleDateString()}</td>
+                                                        <td>
+                                                            {new Date(entry.date + 'T00:00:00').toLocaleDateString()}
+                                                            {entry.isExtraTime && <ExtraTimeBadge />}
+                                                        </td>
                                                         <td>{formatTimeDisplay(entry.startTime)}</td>
                                                         <td>{formatTimeDisplay(entry.endTime)}</td>
                                                         <td><strong>{formatHoursWorked(entry.hours)}</strong></td>
@@ -3034,6 +3125,232 @@
 
 
         // ============================================
+        // WORK SCHEDULE CARD (admin edits, user reads)
+        // ============================================
+        const WorkScheduleCard = ({ user, readOnly = false }) => {
+            const buildDraft = (schedule) => {
+                const draft = {};
+                for (const { key } of SCHEDULE_DAYS) {
+                    const cfg = schedule && schedule[key];
+                    draft[key] = {
+                        enabled: !!(cfg && cfg.start && cfg.end),
+                        start: (cfg && cfg.start) || '09:00',
+                        end: (cfg && cfg.end) || '17:00'
+                    };
+                }
+                return draft;
+            };
+
+            const [draft, setDraft] = useState(() => buildDraft(user && user.schedule));
+            const [saving, setSaving] = useState(false);
+            const [togglingCap, setTogglingCap] = useState(false);
+            const [message, setMessage] = useState(null);
+
+            const capEnabled = !!(user && user.scheduleCapEnabled === true);
+
+            useEffect(() => {
+                setDraft(buildDraft(user && user.schedule));
+            }, [user && user.uid, JSON.stringify(user && user.schedule)]);
+
+            const handleToggleCap = async () => {
+                if (!user || togglingCap) return;
+                setTogglingCap(true);
+                setMessage(null);
+                try {
+                    await db.collection('users').doc(user.uid).update({ scheduleCapEnabled: !capEnabled });
+                    setMessage({ type: 'success', text: `Cap ${!capEnabled ? 'enabled' : 'disabled'}.` });
+                    setTimeout(() => setMessage(null), 2000);
+                } catch (err) {
+                    console.error('Failed to toggle cap:', err);
+                    setMessage({ type: 'error', text: 'Failed to update cap.' });
+                } finally {
+                    setTogglingCap(false);
+                }
+            };
+
+            const updateDay = (dayKey, patch) => {
+                setDraft(prev => ({ ...prev, [dayKey]: { ...prev[dayKey], ...patch } }));
+            };
+
+            const handleSave = async () => {
+                const schedule = {};
+                for (const { key } of SCHEDULE_DAYS) {
+                    const d = draft[key];
+                    if (!d.enabled) continue;
+                    if (!d.start || !d.end) {
+                        setMessage({ type: 'error', text: `Set both start and end for ${key}.` });
+                        return;
+                    }
+                    if (timeToDecimal(d.end) <= timeToDecimal(d.start)) {
+                        setMessage({ type: 'error', text: `End time must be after start time on ${key}.` });
+                        return;
+                    }
+                    schedule[key] = { start: d.start, end: d.end };
+                }
+
+                setSaving(true);
+                setMessage(null);
+                try {
+                    await db.collection('users').doc(user.uid).update({ schedule });
+                    setMessage({ type: 'success', text: 'Schedule saved.' });
+                    setTimeout(() => setMessage(null), 3000);
+                } catch (err) {
+                    console.error('Failed to save schedule:', err);
+                    setMessage({ type: 'error', text: 'Failed to save schedule.' });
+                } finally {
+                    setSaving(false);
+                }
+            };
+
+            return (
+                <div className="content-card schedule-card" style={{ maxWidth: '560px' }}>
+                    <div className="card-header">
+                        <h2 className="card-title">{readOnly ? 'My Work Schedule' : 'Work Schedule'}</h2>
+                        {!readOnly && (
+                            <button
+                                type="button"
+                                onClick={handleToggleCap}
+                                disabled={togglingCap}
+                                style={{
+                                    padding: '0.4rem 0.9rem',
+                                    fontSize: '0.85rem',
+                                    fontWeight: 600,
+                                    borderRadius: '999px',
+                                    border: '2px solid ' + (capEnabled ? 'var(--primary)' : 'var(--border, #d1d5db)'),
+                                    background: capEnabled ? 'var(--primary)' : 'transparent',
+                                    color: capEnabled ? '#fff' : 'var(--text-secondary)',
+                                    cursor: togglingCap ? 'wait' : 'pointer'
+                                }}
+                            >
+                                {togglingCap ? 'Saving…' : capEnabled ? 'Cap: ON — Disable' : 'Enable Cap'}
+                            </button>
+                        )}
+                    </div>
+
+                    {message && (
+                        <div className={`alert ${message.type}`} style={{ marginBottom: '1rem' }}>
+                            <Icon name={message.type === 'success' ? 'checkCircle' : 'alertCircle'} size={20} />
+                            {message.text}
+                        </div>
+                    )}
+
+                    <div style={{ display: 'grid', gap: '0.25rem' }}>
+                        <div style={{
+                            display: 'grid',
+                            gridTemplateColumns: '70px 90px 1fr',
+                            gap: '1rem',
+                            alignItems: 'center',
+                            padding: '0.25rem 0.75rem',
+                            fontSize: '0.75rem',
+                            fontWeight: 600,
+                            color: 'var(--text-light)',
+                            textTransform: 'uppercase',
+                            letterSpacing: '0.5px'
+                        }}>
+                            <div>Active</div>
+                            <div>Day</div>
+                            <div>Time</div>
+                        </div>
+
+                        {SCHEDULE_DAYS.map(({ key, label }) => {
+                            const d = draft[key];
+                            const off = !d.enabled;
+                            return (
+                                <div
+                                    key={key}
+                                    style={{
+                                        display: 'grid',
+                                        gridTemplateColumns: '70px 90px 1fr',
+                                        gap: '1rem',
+                                        alignItems: 'center',
+                                        padding: '0.35rem 0.75rem',
+                                        background: off ? 'var(--border-light, #e5e7eb)' : 'var(--bg-main)',
+                                        borderRadius: '8px',
+                                        opacity: off ? 0.6 : 1
+                                    }}
+                                >
+                                    <input
+                                        type="checkbox"
+                                        checked={!off}
+                                        disabled={readOnly}
+                                        onChange={(e) => updateDay(key, { enabled: e.target.checked })}
+                                    />
+                                    <div style={{ fontWeight: 600, fontSize: '0.9rem' }}>{label}</div>
+
+                                    {readOnly ? (
+                                        <div style={{ color: 'var(--text-secondary)', fontSize: '0.9rem' }}>
+                                            {off
+                                                ? <span style={{ color: 'var(--text-light)' }}>—</span>
+                                                : `${formatScheduleTime(d.start)} – ${formatScheduleTime(d.end)}`}
+                                        </div>
+                                    ) : (
+                                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                                            <input
+                                                type="time"
+                                                className="form-input"
+                                                value={d.start}
+                                                disabled={off}
+                                                onChange={(e) => updateDay(key, { start: e.target.value })}
+                                                style={{ flex: 1, padding: '0.35rem 0.5rem', fontSize: '0.9rem' }}
+                                            />
+                                            <span style={{ color: 'var(--text-light)' }}>–</span>
+                                            <input
+                                                type="time"
+                                                className="form-input"
+                                                value={d.end}
+                                                disabled={off}
+                                                onChange={(e) => updateDay(key, { end: e.target.value })}
+                                                style={{ flex: 1, padding: '0.35rem 0.5rem', fontSize: '0.9rem' }}
+                                            />
+                                        </div>
+                                    )}
+                                </div>
+                            );
+                        })}
+                    </div>
+
+                    {!readOnly && (
+                        <div style={{ marginTop: '1.5rem', display: 'flex', justifyContent: 'flex-end' }}>
+                            <button className="btn btn-primary" onClick={handleSave} disabled={saving}>
+                                {saving ? <><div className="spinner"></div>Saving...</> : <><Icon name="check" size={18} />Save Schedule</>}
+                            </button>
+                        </div>
+                    )}
+                </div>
+            );
+        };
+
+
+
+        // ============================================
+        // USER - MY SCHEDULE PAGE
+        // ============================================
+        const MySchedulePage = ({ currentUser }) => {
+            const [liveUser, setLiveUser] = useState(currentUser);
+
+            useEffect(() => {
+                const unsub = db.collection('users').doc(currentUser.uid).onSnapshot(doc => {
+                    if (doc.exists) setLiveUser({ uid: doc.id, ...doc.data() });
+                });
+                return () => unsub();
+            }, [currentUser.uid]);
+
+            return (
+                <div className="main-content">
+                    <div className="main-header">
+                        <h1>My Schedule</h1>
+                        <p>Your scheduled work hours, set by an administrator</p>
+                    </div>
+                    <div className="main-body">
+                        <WorkScheduleCard user={liveUser} readOnly />
+                    </div>
+                </div>
+            );
+        };
+
+
+
+        // ============================================
         // ADMIN - USER DETAIL VIEW
         // ============================================
         const UserDetailView = ({ userId, onBack }) => {
@@ -3047,15 +3364,13 @@
             const [loading, setLoading] = useState(true);
 
             useEffect(() => {
-                // Load user data
-                db.collection('users').doc(userId).get().then(doc => {
-                    if (doc.exists) {
-                        setUser({ uid: doc.id, ...doc.data() });
-                    }
+                // Live user data so schedule edits reflect immediately
+                const unsubUser = db.collection('users').doc(userId).onSnapshot(doc => {
+                    if (doc.exists) setUser({ uid: doc.id, ...doc.data() });
                 });
 
                 // Load all time entries for this user
-                const unsubscribe = db.collection('timeEntries')
+                const unsubEntries = db.collection('timeEntries')
                     .where('userId', '==', userId)
                     .orderBy('date', 'desc')
                     .onSnapshot(snapshot => {
@@ -3067,7 +3382,7 @@
                         setLoading(false);
                     });
 
-                return () => unsubscribe();
+                return () => { unsubUser(); unsubEntries(); };
             }, [userId]);
 
             const weekEntries = timeEntries.filter(entry => {
@@ -3229,6 +3544,9 @@
                             </div>
                         </div>
 
+                        {/* Work Schedule */}
+                        <WorkScheduleCard user={user} />
+
                         {/* Time Entries by Week */}
                         <div className="content-card">
                             <div className="card-header">
@@ -3266,7 +3584,10 @@
                                         <tbody>
                                             {weekEntries.map(entry => (
                                                 <tr key={entry.id}>
-                                                    <td>{new Date(entry.date + 'T00:00:00').toLocaleDateString()}</td>
+                                                    <td>
+                                                        {new Date(entry.date + 'T00:00:00').toLocaleDateString()}
+                                                        {entry.isExtraTime && <ExtraTimeBadge />}
+                                                    </td>
                                                     <td>{formatTimeDisplay(entry.startTime)}</td>
                                                     <td>{formatTimeDisplay(entry.endTime)}</td>
                                                     <td><strong>{formatHoursWorked(entry.hours)}</strong></td>
@@ -3340,9 +3661,6 @@
                         </div>
                     </div>
                     
-
-                    {/* Availability Section */}
-                    <AvailabilityView userId={userId} />
 
                     {/* Monthly History Section */}
                     <MonthlyHistoryView timeEntries={timeEntries} />
@@ -3588,7 +3906,10 @@
                                                         </div>
                                                     </div>
                                                 </td>
-                                                <td>{new Date(entry.date + 'T00:00:00').toLocaleDateString()}</td>
+                                                <td>
+                                                    {new Date(entry.date + 'T00:00:00').toLocaleDateString()}
+                                                    {entry.isExtraTime && <ExtraTimeBadge />}
+                                                </td>
                                                 <td>{formatTimeDisplay(entry.startTime)}</td>
                                                 <td>{formatTimeDisplay(entry.endTime)}</td>
                                                 <td><strong>{formatHoursWorked(entry.hours)}</strong></td>
@@ -4064,486 +4385,6 @@
                 </div>
             );
         };
-
-        // ============================================
-        // AVAILABILITY VIEW (Admin read-only)
-        // ============================================
-        const AvailabilityView = ({ userId }) => {
-            const [currentWeek, setCurrentWeek] = useState(getCurrentWeek());
-            const [availability, setAvailability] = useState(null);
-            const [loading, setLoading] = useState(true);
-
-            const DAYS = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'];
-            const DAY_LABELS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
-            const HOURS = Array.from({ length: 19 }, (_, i) => 8 + i * 0.5);
-
-            const weekStartStr = currentWeek.toLocaleDateString('en-CA');
-            const docId = `${userId}_${weekStartStr}`;
-
-            useEffect(() => {
-                setLoading(true);
-                db.collection('availability').doc(docId).get().then(doc => {
-                    setAvailability(doc.exists ? (doc.data().days || {}) : null);
-                    setLoading(false);
-                }).catch(() => setLoading(false));
-            }, [docId]);
-
-            const formatHour = (hour) => {
-                const wholeHour = Math.floor(hour);
-                const minutes = hour % 1 === 0.5 ? '30' : '00';
-                const period = wholeHour < 12 ? 'AM' : 'PM';
-                const displayHour = wholeHour > 12 ? wholeHour - 12 : wholeHour === 0 ? 12 : wholeHour;
-                return `${displayHour}:${minutes}${period}`;
-            };
-
-            const getDayDate = (dayIndex) => {
-                const date = new Date(currentWeek);
-                date.setDate(date.getDate() + dayIndex);
-                return date.getDate();
-            };
-
-            return (
-                <div className="content-card">
-                    <div className="card-header">
-                        <h2 className="card-title">Weekly Availability</h2>
-                    </div>
-
-                    <div className="week-selector">
-                        <button className="icon-btn" onClick={() => {
-                            const d = new Date(currentWeek); d.setDate(d.getDate() - 7); setCurrentWeek(d);
-                        }}>
-                            <Icon name="chevronLeft" size={20} />
-                        </button>
-                        <div className="week-display">{formatWeekRange(currentWeek)}</div>
-                        <button className="icon-btn" onClick={() => {
-                            const d = new Date(currentWeek); d.setDate(d.getDate() + 7); setCurrentWeek(d);
-                        }}>
-                            <Icon name="chevronRight" size={20} />
-                        </button>
-                    </div>
-
-                    {loading ? (
-                        <div className="empty-state">
-                            <div className="spinner" style={{ margin: '0 auto' }}></div>
-                        </div>
-                    ) : availability === null ? (
-                        <div className="empty-state">
-                            <div className="empty-state-icon"><Icon name="calendar" size={64} /></div>
-                            <div className="empty-state-text">No availability submitted for this week</div>
-                        </div>
-                    ) : (
-                        <div style={{ overflowX: 'auto' }}>
-                            <div style={{
-                                display: 'grid',
-                                gridTemplateColumns: '52px repeat(7, 1fr)',
-                                gap: '0',
-                                minWidth: '560px'
-                            }}>
-                                <div />
-                                {DAYS.map((day, i) => (
-                                    <div key={day} style={{
-                                        textAlign: 'center', padding: '0.4rem 0.25rem',
-                                        fontWeight: '600', fontSize: '0.8rem',
-                                        color: 'var(--text-secondary)', background: 'var(--bg-main)', borderRadius: '6px',
-                                        margin: '0 1px 2px 1px'
-                                    }}>
-                                        <div>{DAY_LABELS[i]}</div>
-                                        <div style={{ fontSize: '0.7rem', color: 'var(--text-light)' }}>{getDayDate(i)}</div>
-                                    </div>
-                                ))}
-                                {HOURS.map(hour => (
-                                    <React.Fragment key={hour}>
-                                        <div style={{
-                                            fontSize: '0.7rem', color: 'var(--text-light)',
-                                            display: 'flex', alignItems: 'flex-start',
-                                            justifyContent: 'flex-end', paddingRight: '6px', paddingTop: '3px'
-                                        }}>{formatHour(hour)}</div>
-                                        {DAYS.map(day => {
-                                            const selected = (availability[day] || []).includes(hour);
-                                            const prevSelected = (availability[day] || []).includes(hour - 0.5);
-                                            const nextSelected = (availability[day] || []).includes(hour + 0.5);
-                                            const isFirst = selected && !prevSelected;
-                                            const isLast = selected && !nextSelected;
-
-                                            let borderRadius = '3px';
-                                            if (selected) {
-                                                if (isFirst && isLast) borderRadius = '4px';
-                                                else if (isFirst) borderRadius = '4px 4px 0 0';
-                                                else if (isLast) borderRadius = '0 0 4px 4px';
-                                                else borderRadius = '0';
-                                            }
-
-                                            return (
-                                                <div key={`${day}-${hour}`} style={{
-                                                    height: '28px',
-                                                    borderRadius,
-                                                    background: selected ? 'var(--success)' : 'var(--bg-main)',
-                                                    borderTop: selected && prevSelected ? 'none' : `1px solid ${selected ? 'var(--success)' : 'var(--border-light)'}`,
-                                                    borderBottom: selected && nextSelected ? 'none' : `1px solid ${selected ? 'var(--success)' : 'var(--border-light)'}`,
-                                                    borderLeft: `1px solid ${selected ? 'var(--success)' : 'var(--border-light)'}`,
-                                                    borderRight: `1px solid ${selected ? 'var(--success)' : 'var(--border-light)'}`
-                                                }} />
-                                            );
-                                        })}
-                                    </React.Fragment>
-                                ))}
-                            </div>
-                            <div style={{ marginTop: '1rem', display: 'flex', gap: '1rem', fontSize: '0.8rem', color: 'var(--text-secondary)', alignItems: 'center' }}>
-                                <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
-                                    <div style={{ width: '14px', height: '14px', background: 'var(--success)', borderRadius: '3px' }} />
-                                    Available
-                                </div>
-                                <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
-                                    <div style={{ width: '14px', height: '14px', background: 'var(--bg-main)', border: '1px solid var(--border-light)', borderRadius: '3px' }} />
-                                    Unavailable
-                                </div>
-                            </div>
-                        </div>
-                    )}
-                </div>
-            );
-        };
-
-        // ============================================
-        // AVAILABILITY CALENDAR (User input page)
-        // ============================================
-        const AvailabilityCalendar = ({ currentUser }) => {
-            const getNextWeek = () => {
-                const now = new Date();
-                const dayOfWeek = now.getDay();
-                const diff = now.getDate() - dayOfWeek + (dayOfWeek === 0 ? -6 : 1) + 7;
-                const monday = new Date(now);
-                monday.setDate(diff);
-                monday.setHours(0, 0, 0, 0);
-                return monday;
-            };
-
-            const [selectedWeek, setSelectedWeek] = useState(getNextWeek);
-            const [availability, setAvailability] = useState({});
-            const [loading, setLoading] = useState(false);
-            const [saving, setSaving] = useState(false);
-            const [message, setMessage] = useState(null);
-            const [inputDay, setInputDay] = useState('monday');
-            const [inputStart, setInputStart] = useState('08:00');
-            const [inputEnd, setInputEnd] = useState('17:00');
-            const [editMode, setEditMode] = useState(false);
-
-            const DAYS = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'];
-            const DAY_LABELS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
-            const HOURS = Array.from({ length: 19 }, (_, i) => 8 + i * 0.5);
-
-            const weekStartStr = selectedWeek.toLocaleDateString('en-CA');
-            const docId = `${currentUser.uid}_${weekStartStr}`;
-
-            useEffect(() => {
-                setLoading(true);
-                db.collection('availability').doc(docId).get().then(doc => {
-                    setAvailability(doc.exists ? (doc.data().days || {}) : {});
-                    setLoading(false);
-                }).catch(() => setLoading(false));
-            }, [docId]);
-
-            const toggleSlot = (day, hour) => {
-                setAvailability(prev => {
-                    const slots = prev[day] || [];
-                    const updated = slots.includes(hour)
-                        ? slots.filter(h => h !== hour)
-                        : [...slots, hour].sort((a, b) => a - b);
-                    return { ...prev, [day]: updated };
-                });
-            };
-
-            const handleSave = async () => {
-                setSaving(true);
-                try {
-                    await db.collection('availability').doc(docId).set({
-                        userId: currentUser.uid,
-                        userName: `${currentUser.firstName} ${currentUser.lastName}`,
-                        weekStart: weekStartStr,
-                        days: availability,
-                        updatedAt: firebase.firestore.FieldValue.serverTimestamp()
-                    });
-                    setMessage({ type: 'success', text: 'Availability saved!' });
-                    setTimeout(() => setMessage(null), 3000);
-                } catch (error) {
-                    console.error(error);
-                    setMessage({ type: 'error', text: 'Failed to save availability' });
-                } finally {
-                    setSaving(false);
-                }
-            };
-
-            const formatHour = (hour) => {
-                const wholeHour = Math.floor(hour);
-                const minutes = hour % 1 === 0.5 ? '30' : '00';
-                const period = wholeHour < 12 ? 'AM' : 'PM';
-                const displayHour = wholeHour > 12 ? wholeHour - 12 : wholeHour === 0 ? 12 : wholeHour;
-                return `${displayHour}:${minutes}${period}`;
-            };
-
-            const getDayDate = (dayIndex) => {
-                const date = new Date(selectedWeek);
-                date.setDate(date.getDate() + dayIndex);
-                return date.getDate();
-            };
-
-            const addSlots = () => {
-                const start = timeToDecimal(inputStart);
-                const end = timeToDecimal(inputEnd);
-                if (start >= end) return;
-                setAvailability(prev => {
-                    const slots = prev[inputDay] || [];
-                    const newSlots = [...slots];
-                    for (let h = Math.ceil(start * 2) / 2; h < end; h += 0.5) {
-                        if (!newSlots.includes(h)) newSlots.push(h);
-                    }
-                    return { ...prev, [inputDay]: newSlots.sort((a, b) => a - b) };
-                });
-            };
-
-            const removeSlots = () => {
-                const start = timeToDecimal(inputStart);
-                const end = timeToDecimal(inputEnd);
-                if (start >= end) return;
-                setAvailability(prev => {
-                    const slots = prev[inputDay] || [];
-                    const updated = slots.filter(h => h < start || h >= end);
-                    return { ...prev, [inputDay]: updated };
-                });
-            };
-
-            return (
-                <div className="main-content">
-                    <div className="main-header">
-                        <h1>My Availability</h1>
-                        <p>Set your availability for the upcoming week</p>
-                    </div>
-
-                    <div className="main-body">
-                        {/* ── Input card ── */}
-                        <div className="content-card" style={{ marginBottom: '1.5rem' }}>
-                            <div style={{ marginBottom: '1rem' }}>
-                                <h3 style={{ fontSize: '1rem', fontWeight: '600', color: 'var(--text-primary)', marginBottom: '0.25rem' }}>Add Availability</h3>
-                                <p style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>Select a day and time range, then click Add.</p>
-                            </div>
-                            <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap', alignItems: 'flex-end' }}>
-                                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem', minWidth: '130px' }}>
-                                    <label style={{ fontSize: '0.75rem', fontWeight: '600', color: 'var(--text-secondary)' }}>Day</label>
-                                    <select
-                                        className="form-select"
-                                        style={{ padding: '0.6rem 0.875rem', fontSize: '0.9rem' }}
-                                        value={inputDay}
-                                        onChange={e => setInputDay(e.target.value)}
-                                    >
-                                        {DAYS.map((d, i) => (
-                                            <option key={d} value={d}>{DAY_LABELS[i]}</option>
-                                        ))}
-                                    </select>
-                                </div>
-                                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem', minWidth: '130px' }}>
-                                    <label style={{ fontSize: '0.75rem', fontWeight: '600', color: 'var(--text-secondary)' }}>From</label>
-                                    <input
-                                        type="time"
-                                        className="form-input"
-                                        style={{ padding: '0.6rem 0.875rem', fontSize: '0.9rem' }}
-                                        value={inputStart}
-                                        onChange={e => setInputStart(e.target.value)}
-                                        min="08:00"
-                                        max="17:00"
-                                    />
-                                </div>
-                                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem', minWidth: '130px' }}>
-                                    <label style={{ fontSize: '0.75rem', fontWeight: '600', color: 'var(--text-secondary)' }}>To</label>
-                                    <input
-                                        type="time"
-                                        className="form-input"
-                                        style={{ padding: '0.6rem 0.875rem', fontSize: '0.9rem' }}
-                                        value={inputEnd}
-                                        onChange={e => setInputEnd(e.target.value)}
-                                        min="08:00"
-                                        max="17:00"
-                                    />
-                                </div>
-                                <div style={{ display: 'flex', gap: '0.5rem' }}>
-                                    <button
-                                        className="btn btn-success"
-                                        onClick={addSlots}
-                                        disabled={inputStart >= inputEnd}
-                                        style={{ padding: '0.6rem 1.25rem', fontSize: '0.9rem' }}
-                                    >
-                                        <Icon name="plus" size={16} />&nbsp;Add
-                                    </button>
-                                    <button
-                                        className="btn btn-danger"
-                                        onClick={removeSlots}
-                                        disabled={inputStart >= inputEnd}
-                                        style={{ padding: '0.6rem 1.25rem', fontSize: '0.9rem' }}
-                                    >
-                                        <Icon name="x" size={16} />&nbsp;Remove
-                                    </button>
-                                </div>
-                            </div>
-                        </div>
-
-                        {/* ── Calendar card ── */}
-                        <div className="content-card">
-                            <div className="week-selector">
-                                <button className="icon-btn" onClick={() => {
-                                    const d = new Date(selectedWeek); d.setDate(d.getDate() - 7); setSelectedWeek(d);
-                                }}>
-                                    <Icon name="chevronLeft" size={20} />
-                                </button>
-                                <div className="week-display">{formatWeekRange(selectedWeek)}</div>
-                                <button className="icon-btn" onClick={() => {
-                                    const d = new Date(selectedWeek); d.setDate(d.getDate() + 7); setSelectedWeek(d);
-                                }}>
-                                    <Icon name="chevronRight" size={20} />
-                                </button>
-                                <button
-                                    className={`btn ${editMode ? 'btn-primary' : 'btn-secondary'}`}
-                                    onClick={() => setEditMode(e => !e)}
-                                    style={{ marginLeft: '0.5rem', padding: '0.4rem 1rem', fontSize: '0.85rem' }}
-                                >
-                                    {editMode ? <><Icon name="check" size={15} />&nbsp;Done</> : <><Icon name="edit" size={15} />&nbsp;Edit</>}
-                                </button>
-                            </div>
-
-                            {message && (
-                                <div className={`alert ${message.type}`}>
-                                    <Icon name={message.type === 'success' ? 'checkCircle' : 'alertCircle'} size={20} />
-                                    {message.text}
-                                </div>
-                            )}
-
-                            {loading ? (
-                                <div className="empty-state">
-                                    <div className="spinner" style={{ margin: '0 auto' }}></div>
-                                </div>
-                            ) : (
-                                <>
-                                    {editMode && (
-                                        <p style={{ marginBottom: '0.75rem', fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
-                                            Click a slot to remove it. Press <strong>Done</strong> when finished.
-                                        </p>
-                                    )}
-                                    <div style={{ overflowX: 'auto' }}>
-                                        <div style={{
-                                            display: 'grid',
-                                            gridTemplateColumns: '52px repeat(7, 1fr)',
-                                            gap: '0',
-                                            minWidth: '560px'
-                                        }}>
-                                            <div />
-                                            {DAYS.map((day, i) => (
-                                                <div key={day} style={{
-                                                    textAlign: 'center', padding: '0.5rem 0.25rem',
-                                                    fontWeight: '600', fontSize: '0.8rem',
-                                                    color: 'var(--text-secondary)', background: 'var(--bg-main)', borderRadius: '6px',
-                                                    margin: '0 1px 2px 1px'
-                                                }}>
-                                                    <div>{DAY_LABELS[i]}</div>
-                                                    <div style={{ fontSize: '0.7rem', color: 'var(--text-light)' }}>{getDayDate(i)}</div>
-                                                </div>
-                                            ))}
-                                            {HOURS.map(hour => (
-                                                <React.Fragment key={hour}>
-                                                    <div style={{
-                                                        fontSize: '0.7rem', color: 'var(--text-light)',
-                                                        display: 'flex', alignItems: 'flex-start',
-                                                        justifyContent: 'flex-end', paddingRight: '6px', paddingTop: '3px'
-                                                    }}>{formatHour(hour)}</div>
-                                                    {DAYS.map(day => {
-                                                        const selected = (availability[day] || []).includes(hour);
-                                                        const prevSelected = (availability[day] || []).includes(hour - 0.5);
-                                                        const nextSelected = (availability[day] || []).includes(hour + 0.5);
-                                                        const isFirst = selected && !prevSelected;
-                                                        const isLast = selected && !nextSelected;
-
-                                                        let borderRadius = '3px';
-                                                        if (selected) {
-                                                            if (isFirst && isLast) borderRadius = '4px';
-                                                            else if (isFirst) borderRadius = '4px 4px 0 0';
-                                                            else if (isLast) borderRadius = '0 0 4px 4px';
-                                                            else borderRadius = '0';
-                                                        }
-
-                                                        return (
-                                                            <div
-                                                                key={`${day}-${hour}`}
-                                                                onClick={() => editMode && selected && toggleSlot(day, hour)}
-                                                                style={{
-                                                                    height: '32px',
-                                                                    borderRadius,
-                                                                    background: selected ? (editMode ? 'var(--success-light)' : 'var(--success)') : 'var(--bg-main)',
-                                                                    borderTop: selected && prevSelected ? 'none' : `1px solid ${selected ? 'var(--success)' : 'var(--border-light)'}`,
-                                                                    borderBottom: selected && nextSelected ? 'none' : `1px solid ${selected ? 'var(--success)' : 'var(--border-light)'}`,
-                                                                    borderLeft: `1px solid ${selected ? 'var(--success)' : 'var(--border-light)'}`,
-                                                                    borderRight: `1px solid ${selected ? 'var(--success)' : 'var(--border-light)'}`,
-                                                                    transition: 'background 0.15s ease',
-                                                                    cursor: editMode && selected ? 'pointer' : 'default',
-                                                                    display: 'flex', alignItems: 'center', justifyContent: 'center',
-                                                                    position: 'relative'
-                                                                }}
-                                                                onMouseEnter={e => {
-                                                                    if (editMode && selected) {
-                                                                        e.currentTarget.style.background = 'var(--success)';
-                                                                        const icon = e.currentTarget.querySelector('.delete-icon');
-                                                                        if (icon) icon.style.opacity = '1';
-                                                                    }
-                                                                }}
-                                                                onMouseLeave={e => {
-                                                                    if (editMode && selected) {
-                                                                        e.currentTarget.style.background = 'var(--success-light)';
-                                                                        const icon = e.currentTarget.querySelector('.delete-icon');
-                                                                        if (icon) icon.style.opacity = '0';
-                                                                    }
-                                                                }}
-                                                            >
-                                                                {editMode && selected && (
-                                                                    <span className="delete-icon" style={{
-                                                                        opacity: 0,
-                                                                        transition: 'opacity 0.15s ease',
-                                                                        color: 'white',
-                                                                        fontSize: '0.75rem',
-                                                                        fontWeight: '700',
-                                                                        pointerEvents: 'none',
-                                                                        lineHeight: 1
-                                                                    }}>✕</span>
-                                                                )}
-                                                            </div>
-                                                        );
-                                                    })}
-                                                </React.Fragment>
-                                            ))}
-                                        </div>
-                                    </div>
-
-                                    <div style={{ marginTop: '1.5rem', display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '1rem' }}>
-                                        <div style={{ display: 'flex', gap: '1rem', fontSize: '0.85rem', color: 'var(--text-secondary)', alignItems: 'center' }}>
-                                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                                                <div style={{ width: '14px', height: '14px', background: 'var(--success)', borderRadius: '3px' }} />
-                                                Available
-                                            </div>
-                                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                                                <div style={{ width: '14px', height: '14px', background: 'var(--bg-main)', border: '1px solid var(--border-light)', borderRadius: '3px' }} />
-                                                Unavailable
-                                            </div>
-                                        </div>
-                                        <button className="btn btn-success" onClick={handleSave} disabled={saving} style={{ minWidth: '160px' }}>
-                                            {saving
-                                                ? <><div className="spinner" />&nbsp;Saving...</>
-                                                : <><Icon name="check" size={18} />&nbsp;Save Availability</>
-                                            }
-                                        </button>
-                                    </div>
-                                </>
-                            )}
-                        </div>
-                    </div>
-                </div>
-            );
-        };
-
         // ============================================
         // GEOLOCATION HELPER
         // ============================================
@@ -4568,49 +4409,6 @@
                 { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 }
             );
         });
-
-        // ============================================
-        // AUTO CLOCK-OUT HELPER
-        // If a user forgets to clock out, after 6:00 PM local on the clock-in date
-        // we auto-write the time entry ending at 4:30 PM and clear the active punch.
-        // Skipped if the user clocked in at or after 4:30 PM (would produce a non-positive shift).
-        // ============================================
-        const AUTO_CUTOFF_HOUR = 18;         // 6:00 PM — when auto-cutoff fires
-        const AUTO_CUTOFF_END_HOUR = 16;     // 4:30 PM — recorded clock-out time
-        const AUTO_CUTOFF_END_MINUTE = 30;
-
-        const runAutoClockOutIfExpired = async (uid, punchData) => {
-            if (!punchData || !punchData.clockInAt || !punchData.clockInDate) return false;
-            const clockIn = typeof punchData.clockInAt.toDate === 'function'
-                ? punchData.clockInAt.toDate()
-                : new Date(punchData.clockInAt);
-
-            const [y, m, d] = punchData.clockInDate.split('-').map(Number);
-            const cutoffTrigger = new Date(y, m - 1, d, AUTO_CUTOFF_HOUR, 0, 0, 0);
-            const cutoffEnd = new Date(y, m - 1, d, AUTO_CUTOFF_END_HOUR, AUTO_CUTOFF_END_MINUTE, 0, 0);
-
-            if (Date.now() < cutoffTrigger.getTime()) return false;
-            if (clockIn.getTime() >= cutoffEnd.getTime()) return false;
-
-            const elapsedMs = cutoffEnd.getTime() - clockIn.getTime();
-            const hours = elapsedMs / (1000 * 60 * 60);
-            const startDecimal = clockIn.getHours() + clockIn.getMinutes() / 60;
-            const endDecimal = AUTO_CUTOFF_END_HOUR + AUTO_CUTOFF_END_MINUTE / 60;
-
-            try {
-                const fn = functions.httpsCallable('autoClockOut');
-                await fn({
-                    date: punchData.clockInDate,
-                    startDecimal,
-                    endDecimal,
-                    hours
-                });
-                return true;
-            } catch (err) {
-                console.error('Auto clock-out failed:', err);
-                return false;
-            }
-        };
 
         // ============================================
         // MAIN APP COMPONENT
@@ -4655,45 +4453,6 @@
 
                 return () => unsubscribe();
             }, []);
-
-            // Watch for an active punch while the user is signed in.
-            // Runs the cutoff check immediately, then schedules a timer for the 6:00 PM mark
-            // so it fires even if the user never navigates back to the Time Clock page.
-            useEffect(() => {
-                if (!currentUser) return;
-                const uid = currentUser.uid;
-                let cutoffTimeout = null;
-
-                const unsub = db.collection('activePunches').doc(uid)
-                    .onSnapshot(async doc => {
-                        if (cutoffTimeout) { clearTimeout(cutoffTimeout); cutoffTimeout = null; }
-                        if (!doc.exists) return;
-
-                        const data = doc.data();
-                        const deleted = await runAutoClockOutIfExpired(uid, data);
-                        if (deleted || !data.clockInDate) return;
-
-                        // Schedule a check at 6:00 PM on the clock-in date
-                        const [y, m, d] = data.clockInDate.split('-').map(Number);
-                        const trigger = new Date(y, m - 1, d, AUTO_CUTOFF_HOUR, 0, 0, 0).getTime();
-                        const msUntil = trigger - Date.now();
-                        if (msUntil > 0) {
-                            cutoffTimeout = setTimeout(async () => {
-                                try {
-                                    const latest = await db.collection('activePunches').doc(uid).get();
-                                    if (latest.exists) await runAutoClockOutIfExpired(uid, latest.data());
-                                } catch (e) {
-                                    console.error('Scheduled auto clock-out check failed:', e);
-                                }
-                            }, msUntil + 1000);
-                        }
-                    }, err => console.error('activePunch watcher error:', err));
-
-                return () => {
-                    unsub();
-                    if (cutoffTimeout) clearTimeout(cutoffTimeout);
-                };
-            }, [currentUser]);
 
             const handleLogin = (user) => {
                 setCurrentUser(user);
@@ -4806,8 +4565,8 @@
                         <CreateUser />
                     )}
 
-                    {currentPage === 'availability' && currentUser.role !== 'admin' && (
-                        <AvailabilityCalendar currentUser={currentUser} />
+                    {currentPage === 'schedule' && currentUser.role !== 'admin' && (
+                        <MySchedulePage currentUser={currentUser} />
                     )}
                 </div>
             );
