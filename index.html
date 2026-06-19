@@ -1288,6 +1288,68 @@
             return `${displayHour}:${minute.toString().padStart(2, '0')} ${period}`;
         };
 
+        // CT is shown as the office reference time. Hardcoded to match the
+        // server OFFICE_TIMEZONE default; update both together if that changes.
+        const OFFICE_TZ_DISPLAY = 'America/Chicago';
+
+        const toDateOrNull = (ts) => {
+            if (!ts) return null;
+            if (typeof ts.toDate === 'function') return ts.toDate();
+            const d = new Date(ts);
+            return isNaN(d.getTime()) ? null : d;
+        };
+
+        const formatInZone = (date, ianaZone) => {
+            try {
+                return new Intl.DateTimeFormat('en-US', {
+                    hour: 'numeric', minute: '2-digit', hour12: true, timeZone: ianaZone
+                }).format(date);
+            } catch (e) {
+                return null;
+            }
+        };
+
+        // "Asia/Baghdad" -> "Baghdad"
+        const zoneLabel = (zone) => zone ? zone.split('/').pop().replace(/_/g, ' ') : '';
+
+        // Renders a clock time for an entry. Uses the raw UTC instant + captured
+        // zone to show local + CT when available; otherwise falls back to the
+        // legacy CT decimal. Capped/extra-time entries use the fallback because
+        // their start/end decimals are schedule-derived, not the raw instants.
+        const ClockTime = ({ entry, which }) => {
+            const decimal = which === 'start' ? entry.startTime : entry.endTime;
+            const at = toDateOrNull(which === 'start' ? entry.clockInAt : entry.clockOutAt);
+            const zone = which === 'start' ? entry.clockInTimeZone : entry.clockOutTimeZone;
+            const usable = at && zone && !entry.capped && !entry.isExtraTime;
+            if (!usable) {
+                return <span>{formatTimeDisplay(decimal)}</span>;
+            }
+            const ct = formatInZone(at, OFFICE_TZ_DISPLAY);
+            if (zone === OFFICE_TZ_DISPLAY) {
+                return <span>{ct} CT</span>;
+            }
+            const local = formatInZone(at, zone);
+            if (!local) return <span>{ct} CT</span>;
+            return (
+                <span>
+                    {local} <span style={{ color: 'var(--text-light)', fontSize: '0.8em' }}>{zoneLabel(zone)}</span>
+                    {' · '}
+                    <span style={{ color: 'var(--text-light)', fontSize: '0.8em' }}>{ct} CT</span>
+                </span>
+            );
+        };
+
+        // Small "Iraq · Baghdad" chip; renders nothing when no location captured.
+        const LocationChip = ({ entry }) => {
+            const parts = [entry.clockInCountry, entry.clockInCity].filter(Boolean);
+            if (!parts.length) return null;
+            return (
+                <span style={{ marginLeft: '0.5rem', fontSize: '0.75rem', color: 'var(--text-light)' }}>
+                    📍 {parts.join(' · ')}
+                </span>
+            );
+        };
+
         // NEW: Convert time string (HH:MM) to decimal hours
         const timeToDecimal = (timeString) => {
             const [hours, minutes] = timeString.split(':').map(Number);
@@ -2032,9 +2094,10 @@
                                                 <td>
                                                     {new Date(entry.date + 'T00:00:00').toLocaleDateString()}
                                                     {entry.isExtraTime && <ExtraTimeBadge />}
+                                                    <LocationChip entry={entry} />
                                                 </td>
-                                                <td>{formatTimeDisplay(entry.startTime)}</td>
-                                                <td>{formatTimeDisplay(entry.endTime)}</td>
+                                                <td><ClockTime entry={entry} which="start" /></td>
+                                                <td><ClockTime entry={entry} which="end" /></td>
                                                 <td><strong>{formatHoursWorked(entry.hours)}</strong></td>
                                                 <td>
                                                     <span className={`status-badge ${entry.status}`}>
@@ -2811,9 +2874,10 @@
                                                         <td>
                                                             {new Date(entry.date + 'T00:00:00').toLocaleDateString()}
                                                             {entry.isExtraTime && <ExtraTimeBadge />}
+                                                            <LocationChip entry={entry} />
                                                         </td>
-                                                        <td>{formatTimeDisplay(entry.startTime)}</td>
-                                                        <td>{formatTimeDisplay(entry.endTime)}</td>
+                                                        <td><ClockTime entry={entry} which="start" /></td>
+                                                        <td><ClockTime entry={entry} which="end" /></td>
                                                         <td><strong>{formatHoursWorked(entry.hours)}</strong></td>
                                                         <td>
                                                             <span className={`status-badge ${entry.status}`}>
@@ -3424,9 +3488,10 @@
                                                     <td>
                                                         {new Date(entry.date + 'T00:00:00').toLocaleDateString()}
                                                         {entry.isExtraTime && <ExtraTimeBadge />}
+                                                        <LocationChip entry={entry} />
                                                     </td>
-                                                    <td>{formatTimeDisplay(entry.startTime)}</td>
-                                                    <td>{formatTimeDisplay(entry.endTime)}</td>
+                                                    <td><ClockTime entry={entry} which="start" /></td>
+                                                    <td><ClockTime entry={entry} which="end" /></td>
                                                     <td><strong>{formatHoursWorked(entry.hours)}</strong></td>
                                                     <td>
                                                         <span className={`status-badge ${entry.status}`}>
@@ -3746,9 +3811,10 @@
                                                 <td>
                                                     {new Date(entry.date + 'T00:00:00').toLocaleDateString()}
                                                     {entry.isExtraTime && <ExtraTimeBadge />}
+                                                    <LocationChip entry={entry} />
                                                 </td>
-                                                <td>{formatTimeDisplay(entry.startTime)}</td>
-                                                <td>{formatTimeDisplay(entry.endTime)}</td>
+                                                <td><ClockTime entry={entry} which="start" /></td>
+                                                <td><ClockTime entry={entry} which="end" /></td>
                                                 <td><strong>{formatHoursWorked(entry.hours)}</strong></td>
                                                 <td style={{ fontSize: '0.85rem', color: 'var(--text-light)' }}>
                                                     {entry.submittedAt?.toDate ? entry.submittedAt.toDate().toLocaleString() : 'N/A'}
@@ -4183,9 +4249,9 @@
                                     <tbody>
                                         {monthEntries.map(entry => (
                                             <tr key={entry.id}>
-                                                <td>{new Date(entry.date + 'T00:00:00').toLocaleDateString()}</td>
-                                                <td>{formatTimeDisplay(entry.startTime)}</td>
-                                                <td>{formatTimeDisplay(entry.endTime)}</td>
+                                                <td>{new Date(entry.date + 'T00:00:00').toLocaleDateString()}<LocationChip entry={entry} /></td>
+                                                <td><ClockTime entry={entry} which="start" /></td>
+                                                <td><ClockTime entry={entry} which="end" /></td>
                                                 <td><strong>{formatHoursWorked(entry.hours)}</strong></td>
                                                 <td>
                                                     <span className={`status-badge ${entry.status}`}>
