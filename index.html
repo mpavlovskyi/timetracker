@@ -1288,6 +1288,68 @@
             return `${displayHour}:${minute.toString().padStart(2, '0')} ${period}`;
         };
 
+        // CT is shown as the office reference time. Hardcoded to match the
+        // server OFFICE_TIMEZONE default; update both together if that changes.
+        const OFFICE_TZ_DISPLAY = 'America/Chicago';
+
+        const toDateOrNull = (ts) => {
+            if (!ts) return null;
+            if (typeof ts.toDate === 'function') return ts.toDate();
+            const d = new Date(ts);
+            return isNaN(d.getTime()) ? null : d;
+        };
+
+        const formatInZone = (date, ianaZone) => {
+            try {
+                return new Intl.DateTimeFormat('en-US', {
+                    hour: 'numeric', minute: '2-digit', hour12: true, timeZone: ianaZone
+                }).format(date);
+            } catch (e) {
+                return null;
+            }
+        };
+
+        // "Asia/Baghdad" -> "Baghdad"
+        const zoneLabel = (zone) => zone ? zone.split('/').pop().replace(/_/g, ' ') : '';
+
+        // Renders a clock time for an entry. Uses the raw UTC instant + captured
+        // zone to show local + CT when available; otherwise falls back to the
+        // legacy CT decimal. Capped/extra-time entries use the fallback because
+        // their start/end decimals are schedule-derived, not the raw instants.
+        const ClockTime = ({ entry, which }) => {
+            const decimal = which === 'start' ? entry.startTime : entry.endTime;
+            const at = toDateOrNull(which === 'start' ? entry.clockInAt : entry.clockOutAt);
+            const zone = which === 'start' ? entry.clockInTimeZone : entry.clockOutTimeZone;
+            const usable = at && zone && !entry.capped && !entry.isExtraTime;
+            if (!usable) {
+                return <span>{formatTimeDisplay(decimal)}</span>;
+            }
+            const ct = formatInZone(at, OFFICE_TZ_DISPLAY);
+            if (zone === OFFICE_TZ_DISPLAY) {
+                return <span>{ct} CT</span>;
+            }
+            const local = formatInZone(at, zone);
+            if (!local) return <span>{ct} CT</span>;
+            return (
+                <span>
+                    {local} <span style={{ color: 'var(--text-light)', fontSize: '0.8em' }}>{zoneLabel(zone)}</span>
+                    {' · '}
+                    <span style={{ color: 'var(--text-light)', fontSize: '0.8em' }}>{ct} CT</span>
+                </span>
+            );
+        };
+
+        // Small "Iraq · Baghdad" chip; renders nothing when no location captured.
+        const LocationChip = ({ entry }) => {
+            const parts = [entry.clockInCountry, entry.clockInCity].filter(Boolean);
+            if (!parts.length) return null;
+            return (
+                <span style={{ marginLeft: '0.5rem', fontSize: '0.75rem', color: 'var(--text-light)' }}>
+                    📍 {parts.join(' · ')}
+                </span>
+            );
+        };
+
         // NEW: Convert time string (HH:MM) to decimal hours
         const timeToDecimal = (timeString) => {
             const [hours, minutes] = timeString.split(':').map(Number);
@@ -1682,7 +1744,6 @@
             const userNavItems = [
                 { id: 'dashboard', label: 'Dashboard', icon: 'dashboard' },
                 { id: 'punch', label: 'Clock In/Out', icon: 'clock' },
-                { id: 'clock', label: 'Log Time', icon: 'edit' },
                 { id: 'profile', label: 'My Profile', icon: 'user' },
                 { id: 'schedule', label: 'My Schedule', icon: 'calendar' },
             ];
@@ -2033,9 +2094,10 @@
                                                 <td>
                                                     {new Date(entry.date + 'T00:00:00').toLocaleDateString()}
                                                     {entry.isExtraTime && <ExtraTimeBadge />}
+                                                    <LocationChip entry={entry} />
                                                 </td>
-                                                <td>{formatTimeDisplay(entry.startTime)}</td>
-                                                <td>{formatTimeDisplay(entry.endTime)}</td>
+                                                <td><ClockTime entry={entry} which="start" /></td>
+                                                <td><ClockTime entry={entry} which="end" /></td>
                                                 <td><strong>{formatHoursWorked(entry.hours)}</strong></td>
                                                 <td>
                                                     <span className={`status-badge ${entry.status}`}>
@@ -2152,32 +2214,36 @@
                 return `${h.toString().padStart(2, '0')}:${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
             };
 
-            const runLocationGatedCall = async (callableName, extraPayload) => {
+            const runPunchCall = async (callableName, extraPayload) => {
+                // Best-effort location: failures are non-blocking now that the
+                // office gate is gone. We collect coords/timezone for display only.
                 let coords = null;
-                let geoDenied = false;
                 try {
                     coords = await getGeolocationCoords();
                 } catch (geoErr) {
-                    if (geoErr && geoErr.code === 'GEOLOCATION_DENIED') geoDenied = true;
-                    // Fall through: server may still allow via IP allowlist
+                    // denied / unavailable — proceed without coords
+                }
+
+                const clientTimeZone = (() => {
+                    try { return Intl.DateTimeFormat().resolvedOptions().timeZone || null; }
+                    catch (e) { return null; }
+                })();
+
+                let country = null, city = null;
+                if (coords) {
+                    const geo = await reverseGeocode(coords);
+                    country = geo.country;
+                    city = geo.city;
                 }
 
                 try {
                     const fn = functions.httpsCallable(callableName);
-                    const result = await fn({ coords, ...extraPayload });
+                    const result = await fn({ coords, clientTimeZone, country, city, ...extraPayload });
                     return result.data;
                 } catch (err) {
                     const detailCode = err && err.details && err.details.code;
                     let text = err && err.message ? err.message : 'Request failed. Please try again.';
-                    if (detailCode === 'LOCATION_REQUIRED') {
-                        text = geoDenied
-                            ? 'You must be at the office to clock in/out. Please enable location access in your browser or connect to the office Wi-Fi.'
-                            : 'You must be at the office to clock in/out. Please allow location access or connect to the office Wi-Fi.';
-                    } else if (detailCode === 'LOCATION_OUTSIDE_RADIUS') {
-                        const d = err.details.distanceMeters;
-                        const r = err.details.radiusMeters;
-                        text = `You appear to be ${d} m from the office (allowed radius: ${r} m). Clock in/out is only available at the office.`;
-                    } else if (detailCode === 'ALREADY_CLOCKED_IN') {
+                    if (detailCode === 'ALREADY_CLOCKED_IN') {
                         text = 'You are already clocked in.';
                     } else if (detailCode === 'NOT_CLOCKED_IN') {
                         text = 'No active punch to clock out of.';
@@ -2197,7 +2263,7 @@
                 setPunchMessage(null);
                 try {
                     const clockInDate = new Date().toLocaleDateString('en-CA');
-                    await runLocationGatedCall('clockIn', { clockInDate });
+                    await runPunchCall('clockIn', { clockInDate });
                     setPunchMessage({ type: 'success', text: 'Clocked in. The timer is running.' });
                 } catch (err) {
                     console.error('Clock in failed:', err);
@@ -2212,7 +2278,7 @@
                 setPunchLoading(true);
                 setPunchMessage(null);
                 try {
-                    const result = await runLocationGatedCall('clockOut', { extendedTime });
+                    const result = await runPunchCall('clockOut', { extendedTime });
                     let text;
                     if (result && result.extraLogged) {
                         text = `Clocked out. Logged your shift plus extra time — both pending review.`;
@@ -2325,172 +2391,6 @@
                 </div>
             );
         };
-
-
-        const TimeClock = ({ currentUser, onNavigate }) => {
-            const [currentTime, setCurrentTime] = useState(new Date());
-            // const [selectedDate, setSelectedDate] = useState(new Date().toISOString().split('T')[0]);
-            const [selectedDate, setSelectedDate] = useState(() => {
-                const today = new Date();
-                return today.toLocaleDateString('en-CA'); // YYYY-MM-DD in local time
-            });
-            const [startTime, setStartTime] = useState('09:00');  // Changed to time string
-            const [endTime, setEndTime] = useState('17:00');      // Changed to time string
-            const [message, setMessage] = useState(null);
-            const [loading, setLoading] = useState(false);
-
-            useEffect(() => {
-                const timer = setInterval(() => setCurrentTime(new Date()), 1000);
-                return () => clearInterval(timer);
-            }, []);
-
-            const handleSubmit = async (e) => {
-                e.preventDefault();
-                setLoading(true);
-                
-                const start = timeToDecimal(startTime);
-                const end = timeToDecimal(endTime);
-
-                if (start >= end) {
-                    setMessage({ type: 'error', text: 'End time must be after start time' });
-                    setLoading(false);
-                    return;
-                }
-
-                const hours = end - start;
-
-                try {
-                    const entry = {
-                        userId: currentUser.uid,
-                        userEmail: currentUser.email,
-                        userName: `${currentUser.firstName} ${currentUser.lastName}`,
-                        date: selectedDate,
-                        startTime: start,
-                        endTime: end,
-                        hours: hours,
-                        status: 'pending',
-                        submittedAt: firebase.firestore.FieldValue.serverTimestamp()
-                    };
-
-                    await db.collection('timeEntries').add(entry);
-                    
-                    setMessage({ type: 'success', text: `Successfully logged ${formatHoursWorked(hours)} for ${new Date(selectedDate + 'T00:00:00').toLocaleDateString()}` });
-                    
-                    setTimeout(() => {
-                        if (onNavigate) {
-                            onNavigate('dashboard');
-                        }
-                    }, 2000);
-                } catch (error) {
-                    console.error('Error submitting time entry:', error);
-                    setMessage({ type: 'error', text: 'Failed to submit time entry' });
-                } finally {
-                    setLoading(false);
-                }
-            };
-
-            return (
-                <div className="main-content">
-                    <div className="main-header">
-                        <h1>Time Clock</h1>
-                        <p>Log your working hours</p>
-                    </div>
-
-                    <div className="main-body">
-                        <div className="content-card">
-                            <div className="clock-widget">
-                                <div className="current-time">
-                                    {currentTime.toLocaleTimeString('en-US', {
-                                        hour: '2-digit',
-                                        minute: '2-digit',
-                                        hour12: true
-                                    })}
-                                </div>
-                                <div className="current-date">
-                                    {formatDate(currentTime)}
-                                </div>
-
-                                {message && (
-                                    <div className={`alert ${message.type}`}>
-                                        <Icon name={message.type === 'success' ? 'checkCircle' : 'alertCircle'} size={20} />
-                                        {message.text}
-                                    </div>
-                                )}
-
-                                <form onSubmit={handleSubmit} className="clock-form">
-                                    <div className="form-group">
-                                        <label className="form-label">Date</label>
-                                        <input
-                                            type="date"
-                                            className="form-input"
-                                            value={selectedDate}
-                                            onChange={(e) => setSelectedDate(e.target.value)}
-                                            max={new Date().toISOString().split('T')[0]}
-                                            required
-                                            disabled={loading}
-                                        />
-                                    </div>
-
-                                    <div className="time-inputs">
-                                        <div className="form-group">
-                                            <label className="form-label">Start Time</label>
-                                            <input
-                                                type="time"
-                                                className="form-input"
-                                                value={startTime}
-                                                onChange={(e) => setStartTime(e.target.value)}
-                                                required
-                                                disabled={loading}
-                                            />
-                                        </div>
-
-                                        <div className="form-group">
-                                            <label className="form-label">End Time</label>
-                                            <input
-                                                type="time"
-                                                className="form-input"
-                                                value={endTime}
-                                                onChange={(e) => setEndTime(e.target.value)}
-                                                required
-                                                disabled={loading}
-                                            />
-                                        </div>
-                                    </div>
-
-                                    <div style={{ 
-                                        background: 'var(--info-light)', 
-                                        padding: '1rem', 
-                                        borderRadius: '12px', 
-                                        marginBottom: '1.5rem',
-                                        textAlign: 'center',
-                                        fontSize: '1.1rem',
-                                        fontWeight: '600',
-                                        color: 'var(--primary)'
-                                    }}>
-                                        Total Hours: {formatHoursWorked(Math.max(0, timeToDecimal(endTime) - timeToDecimal(startTime)))}
-                                    </div>
-
-                                    <button type="submit" className="btn btn-primary" style={{ width: '100%' }} disabled={loading}>
-                                        {loading ? (
-                                            <>
-                                                <div className="spinner"></div>
-                                                Submitting...
-                                            </>
-                                        ) : (
-                                            <>
-                                                <Icon name="clock" size={20} />
-                                                Submit Time Entry
-                                            </>
-                                        )}
-                                    </button>
-                                </form>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-            );
-        };
-
 
 
 
@@ -2974,9 +2874,10 @@
                                                         <td>
                                                             {new Date(entry.date + 'T00:00:00').toLocaleDateString()}
                                                             {entry.isExtraTime && <ExtraTimeBadge />}
+                                                            <LocationChip entry={entry} />
                                                         </td>
-                                                        <td>{formatTimeDisplay(entry.startTime)}</td>
-                                                        <td>{formatTimeDisplay(entry.endTime)}</td>
+                                                        <td><ClockTime entry={entry} which="start" /></td>
+                                                        <td><ClockTime entry={entry} which="end" /></td>
                                                         <td><strong>{formatHoursWorked(entry.hours)}</strong></td>
                                                         <td>
                                                             <span className={`status-badge ${entry.status}`}>
@@ -3587,9 +3488,10 @@
                                                     <td>
                                                         {new Date(entry.date + 'T00:00:00').toLocaleDateString()}
                                                         {entry.isExtraTime && <ExtraTimeBadge />}
+                                                        <LocationChip entry={entry} />
                                                     </td>
-                                                    <td>{formatTimeDisplay(entry.startTime)}</td>
-                                                    <td>{formatTimeDisplay(entry.endTime)}</td>
+                                                    <td><ClockTime entry={entry} which="start" /></td>
+                                                    <td><ClockTime entry={entry} which="end" /></td>
                                                     <td><strong>{formatHoursWorked(entry.hours)}</strong></td>
                                                     <td>
                                                         <span className={`status-badge ${entry.status}`}>
@@ -3909,9 +3811,10 @@
                                                 <td>
                                                     {new Date(entry.date + 'T00:00:00').toLocaleDateString()}
                                                     {entry.isExtraTime && <ExtraTimeBadge />}
+                                                    <LocationChip entry={entry} />
                                                 </td>
-                                                <td>{formatTimeDisplay(entry.startTime)}</td>
-                                                <td>{formatTimeDisplay(entry.endTime)}</td>
+                                                <td><ClockTime entry={entry} which="start" /></td>
+                                                <td><ClockTime entry={entry} which="end" /></td>
                                                 <td><strong>{formatHoursWorked(entry.hours)}</strong></td>
                                                 <td style={{ fontSize: '0.85rem', color: 'var(--text-light)' }}>
                                                     {entry.submittedAt?.toDate ? entry.submittedAt.toDate().toLocaleString() : 'N/A'}
@@ -4346,9 +4249,9 @@
                                     <tbody>
                                         {monthEntries.map(entry => (
                                             <tr key={entry.id}>
-                                                <td>{new Date(entry.date + 'T00:00:00').toLocaleDateString()}</td>
-                                                <td>{formatTimeDisplay(entry.startTime)}</td>
-                                                <td>{formatTimeDisplay(entry.endTime)}</td>
+                                                <td>{new Date(entry.date + 'T00:00:00').toLocaleDateString()}<LocationChip entry={entry} /></td>
+                                                <td><ClockTime entry={entry} which="start" /></td>
+                                                <td><ClockTime entry={entry} which="end" /></td>
                                                 <td><strong>{formatHoursWorked(entry.hours)}</strong></td>
                                                 <td>
                                                     <span className={`status-badge ${entry.status}`}>
@@ -4409,6 +4312,28 @@
                 { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 }
             );
         });
+
+        // Reverse-geocode coords to { country, city } via BigDataCloud's free,
+        // keyless, CORS-enabled client endpoint. Returns nulls on any failure —
+        // location is best-effort and never blocks a punch.
+        const reverseGeocode = async (coords) => {
+            if (!coords || typeof coords.lat !== 'number' || typeof coords.lng !== 'number') {
+                return { country: null, city: null };
+            }
+            try {
+                const url = `https://api.bigdatacloud.net/data/reverse-geocode-client?latitude=${coords.lat}&longitude=${coords.lng}&localityLanguage=en`;
+                const res = await fetch(url);
+                if (!res.ok) return { country: null, city: null };
+                const j = await res.json();
+                return {
+                    country: j.countryName || null,
+                    city: j.city || j.locality || j.principalSubdivision || null
+                };
+            } catch (e) {
+                console.warn('reverseGeocode failed:', e);
+                return { country: null, city: null };
+            }
+        };
 
         // ============================================
         // MAIN APP COMPONENT
@@ -4543,10 +4468,8 @@
                         <ClockInOut currentUser={currentUser} />
                     )}
 
-                    {currentPage === 'clock' && (
-                        currentUser.role === 'admin'
-                            ? <AdminLogTime />
-                            : <TimeClock currentUser={currentUser} onNavigate={setCurrentPage} />
+                    {currentPage === 'clock' && currentUser.role === 'admin' && (
+                        <AdminLogTime />
                     )}
 
                     {currentPage === 'profile' && (
