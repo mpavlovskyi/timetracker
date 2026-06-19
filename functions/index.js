@@ -3,6 +3,7 @@ const { setGlobalOptions } = require('firebase-functions/v2');
 const { defineString } = require('firebase-functions/params');
 const admin = require('firebase-admin');
 const ipaddr = require('ipaddr.js');
+const { punchLocationFields, entryAuditFields } = require('./lib/punchFields');
 
 admin.initializeApp();
 const db = admin.firestore();
@@ -274,7 +275,8 @@ exports.clockIn = onCall({ cors: ALLOWED_ORIGINS }, async (request) => {
     userEmail: user.email,
     userName: `${user.firstName || ''} ${user.lastName || ''}`.trim(),
     clockInAt: now,
-    clockInDate
+    clockInDate,
+    ...punchLocationFields(data)
   });
 
   return { ok: true, clockInAt: now.toMillis(), clockInDate };
@@ -317,6 +319,7 @@ exports.clockOut = onCall({ cors: ALLOWED_ORIGINS }, async (request) => {
   const capDecimal = capEnabled ? getScheduleEndForDate(user.schedule, punch.clockInDate) : null;
   const pastCap = capDecimal !== null && endDecimal > capDecimal;
 
+  const clockOutAt = admin.firestore.Timestamp.fromDate(now);
   const entryBase = {
     userId: uid,
     userEmail: user.email,
@@ -324,7 +327,8 @@ exports.clockOut = onCall({ cors: ALLOWED_ORIGINS }, async (request) => {
     date: punch.clockInDate,
     status: 'pending',
     source: 'clock',
-    submittedAt: admin.firestore.FieldValue.serverTimestamp()
+    submittedAt: admin.firestore.FieldValue.serverTimestamp(),
+    ...entryAuditFields(punch, punch.clockInAt, clockOutAt, data)
   };
 
   const batch = db.batch();
