@@ -255,7 +255,8 @@ exports.clockIn = onCall({ cors: ALLOWED_ORIGINS }, async (request) => {
   const clientClockInDate = typeof data.clockInDate === 'string' ? data.clockInDate : null;
 
   const user = await getUserDoc(uid);
-  await locationCheck({ uid, user, coords, rawRequest: request.rawRequest, action: 'clockIn' });
+  // Location gate removed: staff may clock in from anywhere. Coords/timezone are
+  // collected for display/geolocation only (see punchLocationFields), never to block.
 
   // Prevent double clock-in
   const punchRef = db.collection('activePunches').doc(uid);
@@ -289,7 +290,7 @@ exports.clockOut = onCall({ cors: ALLOWED_ORIGINS }, async (request) => {
   const extendedTime = data.extendedTime === true;
 
   const user = await getUserDoc(uid);
-  await locationCheck({ uid, user, coords, rawRequest: request.rawRequest, action: 'clockOut' });
+  // Location gate removed: clock-out succeeds from anywhere.
 
   const punchRef = db.collection('activePunches').doc(uid);
   const punchSnap = await punchRef.get();
