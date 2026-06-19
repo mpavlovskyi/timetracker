@@ -2152,32 +2152,36 @@
                 return `${h.toString().padStart(2, '0')}:${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
             };
 
-            const runLocationGatedCall = async (callableName, extraPayload) => {
+            const runPunchCall = async (callableName, extraPayload) => {
+                // Best-effort location: failures are non-blocking now that the
+                // office gate is gone. We collect coords/timezone for display only.
                 let coords = null;
-                let geoDenied = false;
                 try {
                     coords = await getGeolocationCoords();
                 } catch (geoErr) {
-                    if (geoErr && geoErr.code === 'GEOLOCATION_DENIED') geoDenied = true;
-                    // Fall through: server may still allow via IP allowlist
+                    // denied / unavailable — proceed without coords
+                }
+
+                const clientTimeZone = (() => {
+                    try { return Intl.DateTimeFormat().resolvedOptions().timeZone || null; }
+                    catch (e) { return null; }
+                })();
+
+                let country = null, city = null;
+                if (coords) {
+                    const geo = await reverseGeocode(coords);
+                    country = geo.country;
+                    city = geo.city;
                 }
 
                 try {
                     const fn = functions.httpsCallable(callableName);
-                    const result = await fn({ coords, ...extraPayload });
+                    const result = await fn({ coords, clientTimeZone, country, city, ...extraPayload });
                     return result.data;
                 } catch (err) {
                     const detailCode = err && err.details && err.details.code;
                     let text = err && err.message ? err.message : 'Request failed. Please try again.';
-                    if (detailCode === 'LOCATION_REQUIRED') {
-                        text = geoDenied
-                            ? 'You must be at the office to clock in/out. Please enable location access in your browser or connect to the office Wi-Fi.'
-                            : 'You must be at the office to clock in/out. Please allow location access or connect to the office Wi-Fi.';
-                    } else if (detailCode === 'LOCATION_OUTSIDE_RADIUS') {
-                        const d = err.details.distanceMeters;
-                        const r = err.details.radiusMeters;
-                        text = `You appear to be ${d} m from the office (allowed radius: ${r} m). Clock in/out is only available at the office.`;
-                    } else if (detailCode === 'ALREADY_CLOCKED_IN') {
+                    if (detailCode === 'ALREADY_CLOCKED_IN') {
                         text = 'You are already clocked in.';
                     } else if (detailCode === 'NOT_CLOCKED_IN') {
                         text = 'No active punch to clock out of.';
@@ -2197,7 +2201,7 @@
                 setPunchMessage(null);
                 try {
                     const clockInDate = new Date().toLocaleDateString('en-CA');
-                    await runLocationGatedCall('clockIn', { clockInDate });
+                    await runPunchCall('clockIn', { clockInDate });
                     setPunchMessage({ type: 'success', text: 'Clocked in. The timer is running.' });
                 } catch (err) {
                     console.error('Clock in failed:', err);
@@ -2212,7 +2216,7 @@
                 setPunchLoading(true);
                 setPunchMessage(null);
                 try {
-                    const result = await runLocationGatedCall('clockOut', { extendedTime });
+                    const result = await runPunchCall('clockOut', { extendedTime });
                     let text;
                     if (result && result.extraLogged) {
                         text = `Clocked out. Logged your shift plus extra time — both pending review.`;
@@ -4409,6 +4413,28 @@
                 { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 }
             );
         });
+
+        // Reverse-geocode coords to { country, city } via BigDataCloud's free,
+        // keyless, CORS-enabled client endpoint. Returns nulls on any failure —
+        // location is best-effort and never blocks a punch.
+        const reverseGeocode = async (coords) => {
+            if (!coords || typeof coords.lat !== 'number' || typeof coords.lng !== 'number') {
+                return { country: null, city: null };
+            }
+            try {
+                const url = `https://api.bigdatacloud.net/data/reverse-geocode-client?latitude=${coords.lat}&longitude=${coords.lng}&localityLanguage=en`;
+                const res = await fetch(url);
+                if (!res.ok) return { country: null, city: null };
+                const j = await res.json();
+                return {
+                    country: j.countryName || null,
+                    city: j.city || j.locality || j.principalSubdivision || null
+                };
+            } catch (e) {
+                console.warn('reverseGeocode failed:', e);
+                return { country: null, city: null };
+            }
+        };
 
         // ============================================
         // MAIN APP COMPONENT
