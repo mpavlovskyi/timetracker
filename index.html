@@ -1316,11 +1316,13 @@
         // zone to show local + CT when available; otherwise falls back to the
         // legacy CT decimal. Capped/extra-time entries use the fallback because
         // their start/end decimals are schedule-derived, not the raw instants.
+        // Admin-edited entries (timesEdited) also use the fallback: the edit
+        // rewrites the CT decimals, not the original punch instants.
         const ClockTime = ({ entry, which }) => {
             const decimal = which === 'start' ? entry.startTime : entry.endTime;
             const at = toDateOrNull(which === 'start' ? entry.clockInAt : entry.clockOutAt);
             const zone = which === 'start' ? entry.clockInTimeZone : entry.clockOutTimeZone;
-            const usable = at && zone && !entry.capped && !entry.isExtraTime;
+            const usable = at && zone && !entry.capped && !entry.isExtraTime && !entry.timesEdited;
             if (!usable) {
                 return <span>{formatTimeDisplay(decimal)}</span>;
             }
@@ -3331,6 +3333,7 @@
                         startTime: start,
                         endTime: end,
                         hours: hours,
+                        timesEdited: true,
                         editedAt: firebase.firestore.FieldValue.serverTimestamp()
                     });
                     setEditingEntry(null);
@@ -3742,6 +3745,7 @@
                         startTime: start,
                         endTime: end,
                         hours: hours,
+                        timesEdited: true,
                         editedAt: firebase.firestore.FieldValue.serverTimestamp()
                     });
                     setEditingEntry(null);
