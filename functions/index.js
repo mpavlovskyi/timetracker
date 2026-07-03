@@ -259,6 +259,11 @@ exports.clockIn = onCall({ cors: ALLOWED_ORIGINS }, async (request) => {
   // Location gate removed: staff may clock in from anywhere. Coords/timezone are
   // collected for display/geolocation only (see punchLocationFields), never to block.
 
+  const plan = typeof data.plan === 'string' ? data.plan.trim() : null;
+  if (plan === null || plan.length < 3 || plan.length > 2000) {
+    throw new HttpsError('invalid-argument', 'Please describe your plan for the day before clocking in.');
+  }
+
   // Prevent double clock-in
   const punchRef = db.collection('activePunches').doc(uid);
   const existing = await punchRef.get();
@@ -276,6 +281,7 @@ exports.clockIn = onCall({ cors: ALLOWED_ORIGINS }, async (request) => {
     userName: `${user.firstName || ''} ${user.lastName || ''}`.trim(),
     clockInAt: now,
     clockInDate,
+    plan,
     ...punchLocationFields(data)
   });
 
@@ -309,6 +315,11 @@ exports.clockOut = onCall({ cors: ALLOWED_ORIGINS }, async (request) => {
     throw new HttpsError('failed-precondition', 'Shift too short to log (under 1 minute).', { code: 'SHIFT_TOO_SHORT' });
   }
 
+  const notes = typeof data.notes === 'string' ? data.notes.trim() : null;
+  if (notes === null || notes.length < 3 || notes.length > 2000) {
+    throw new HttpsError('invalid-argument', 'Please describe what you did today before clocking out.');
+  }
+
   const totalHours = elapsedMs / (1000 * 60 * 60);
   const tz = OFFICE_TIMEZONE.value();
   const startDecimal = timeDecimalInTz(clockIn, tz);
@@ -327,6 +338,8 @@ exports.clockOut = onCall({ cors: ALLOWED_ORIGINS }, async (request) => {
     date: punch.clockInDate,
     status: 'pending',
     source: 'clock',
+    notes,
+    ...(typeof punch.plan === 'string' && punch.plan ? { plan: punch.plan } : {}),
     submittedAt: admin.firestore.FieldValue.serverTimestamp(),
     ...entryAuditFields(punch, punch.clockInAt, clockOutAt, data)
   };

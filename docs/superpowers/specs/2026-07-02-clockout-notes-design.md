@@ -116,6 +116,25 @@ The calendar consumes the already-loaded entries — **no new Firestore queries*
 - End-to-end: clock in → clock out with note → note visible in admin
   `UserDetailView` calendar for that day.
 
+## Feature 3 (added 2026-07-03): Required clock-in plan
+
+Mirror of the clock-out notes, on clock-in:
+
+- Clicking **Clock In** opens a modal ("What's your plan for today?"), same
+  validation as clock-out notes (trimmed, 3–2,000 chars, required).
+- The `clockIn` Cloud Function rejects calls without a valid `plan` and stores
+  the trimmed plan on the `activePunches` doc.
+- The `clockOut` function copies `punch.plan` onto the `timeEntries` doc(s)
+  (omitted when absent — punches opened before this deploy have no plan; never
+  write `undefined` to Firestore).
+- Admin Daily Notes calendar shows a labeled "Plan" line above each punch's
+  note. The entries-table Notes column continues to show only the clock-out
+  note.
+- Calendar dedup (by `clockOutAt` + text) applies unchanged; split docs share
+  the same plan via the entry base.
+- Rollout caveat: once deployed, cached old clients cannot clock in until they
+  refresh (same as clock-out).
+
 ## Out of scope
 
 - Editing notes after clock-out.

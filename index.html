@@ -919,6 +919,56 @@
             color: var(--text-primary);
         }
 
+        /* Daily Notes Calendar */
+        .notes-week-grid {
+            display: grid;
+            grid-template-columns: repeat(7, 1fr);
+            gap: 0.75rem;
+        }
+
+        .notes-day-cell {
+            background: var(--bg-main);
+            border: 1px solid var(--border-light);
+            border-radius: 12px;
+            padding: 0.75rem;
+            min-height: 120px;
+        }
+
+        .notes-day-cell.today {
+            border-color: var(--primary);
+            box-shadow: 0 0 0 2px rgba(15, 76, 129, 0.15);
+        }
+
+        .notes-day-header {
+            font-weight: 600;
+            font-size: 0.85rem;
+            color: var(--text-primary);
+            margin-bottom: 0.5rem;
+            padding-bottom: 0.35rem;
+            border-bottom: 1px solid var(--border-light);
+        }
+
+        .notes-day-empty {
+            color: var(--text-light);
+            font-size: 0.85rem;
+        }
+
+        .note-item {
+            font-size: 0.85rem;
+            color: var(--text-secondary);
+            cursor: pointer;
+            margin-bottom: 0.5rem;
+            white-space: normal;
+            word-break: break-word;
+        }
+
+        .note-clamp {
+            display: -webkit-box;
+            -webkit-line-clamp: 3;
+            -webkit-box-orient: vertical;
+            overflow: hidden;
+        }
+
         /* Custom Select */
         .form-select {
             width: 100%;
@@ -1174,6 +1224,10 @@
             .login-content {
                 padding: 1rem;
             }
+
+            .notes-week-grid {
+                grid-template-columns: repeat(2, 1fr);
+            }
         }
 
         @media (max-width: 480px) {
@@ -1199,6 +1253,10 @@
 
             .login-logo h1 {
                 font-size: 1.75rem;
+            }
+
+            .notes-week-grid {
+                grid-template-columns: 1fr;
             }
         }
     </style>
@@ -1349,6 +1407,39 @@
                 <span style={{ marginLeft: '0.5rem', fontSize: '0.75rem', color: 'var(--text-light)' }}>
                     📍 {parts.join(' · ')}
                 </span>
+            );
+        };
+
+        // Truncated note snippet for tables; full text revealed on click.
+        const NoteSnippet = ({ notes }) => {
+            const [expanded, setExpanded] = useState(false);
+            if (!notes) return <span style={{ color: 'var(--text-light)' }}>—</span>;
+            if (notes.length <= 60) return <span>{notes}</span>;
+            return (
+                <span
+                    onClick={() => setExpanded(!expanded)}
+                    title={notes}
+                    style={{ cursor: 'pointer' }}
+                >
+                    {expanded ? notes : notes.slice(0, 60) + '…'}
+                </span>
+            );
+        };
+
+        // Single note line for the daily notes calendar; clamps to a few lines
+        // with expand-on-click. Optional time prefix distinguishes punches; an
+        // optional muted label (e.g. "Plan:") marks the clock-in plan line.
+        const NoteItem = ({ time, text, label }) => {
+            const [expanded, setExpanded] = useState(false);
+            return (
+                <div
+                    className={expanded ? 'note-item' : 'note-item note-clamp'}
+                    onClick={() => setExpanded(!expanded)}
+                >
+                    {label && <strong style={{ color: 'var(--text-light)' }}>{label} </strong>}
+                    {time && <strong style={{ color: 'var(--primary)' }}>{time} </strong>}
+                    {text}
+                </div>
             );
         };
 
@@ -2077,6 +2168,7 @@
                                             <th>End Time</th>
                                             <th>Hours</th>
                                             <th>Status</th>
+                                            <th>Notes</th>
                                             {currentUser.role !== 'admin' && <th style={{ width: '80px', textAlign: 'center' }}>Actions</th>}
                                         </tr>
                                     </thead>
@@ -2105,6 +2197,9 @@
                                                     <span className={`status-badge ${entry.status}`}>
                                                         {entry.status}
                                                     </span>
+                                                </td>
+                                                <td style={{ maxWidth: '220px', whiteSpace: 'normal', fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
+                                                    <NoteSnippet notes={entry.notes} />
                                                 </td>
                                                 {currentUser.role !== 'admin' && (
                                                     <td style={{ textAlign: 'center' }}>
@@ -2151,6 +2246,149 @@
 
 
         // ============================================
+        // CLOCK OUT NOTES MODAL COMPONENT
+        // ============================================
+        const ClockOutNotesModal = ({ onCancel, onConfirm, loading, error }) => {
+            const [notes, setNotes] = useState('');
+            const canConfirm = notes.trim().length >= 3 && !loading;
+
+            return (
+                <div className="modal-overlay" style={{ zIndex: 10000 }}>
+                    <div className="modal" style={{ maxWidth: '500px' }}>
+                        <div className="modal-header">
+                            <h2 className="modal-title">Clock Out</h2>
+                            <button className="close-btn" onClick={onCancel} disabled={loading}>
+                                <Icon name="x" size={20} />
+                            </button>
+                        </div>
+
+                        {error && (
+                            <div className="alert error">
+                                <Icon name="alertCircle" size={20} />
+                                {error}
+                            </div>
+                        )}
+
+                        <div className="form-group">
+                            <label className="form-label">What did you work on today?</label>
+                            <textarea
+                                className="form-input"
+                                value={notes}
+                                onChange={(e) => setNotes(e.target.value)}
+                                placeholder="Briefly describe what you did today"
+                                maxLength={2000}
+                                rows={5}
+                                disabled={loading}
+                                autoFocus
+                                style={{ resize: 'vertical', minHeight: '120px' }}
+                            />
+                            <div style={{ marginTop: '0.5rem', fontSize: '0.85rem', color: 'var(--text-light)', textAlign: 'right' }}>
+                                {notes.length}/2000
+                            </div>
+                        </div>
+
+                        <div className="modal-actions">
+                            <button
+                                type="button"
+                                className="btn btn-secondary"
+                                onClick={onCancel}
+                                disabled={loading}
+                                style={{ flex: 1 }}
+                            >
+                                Cancel
+                            </button>
+                            <button
+                                type="button"
+                                className="btn btn-danger"
+                                onClick={() => onConfirm(notes.trim())}
+                                disabled={!canConfirm}
+                                style={{ flex: 1 }}
+                            >
+                                {loading ? (
+                                    <><div className="spinner"></div>Clocking out...</>
+                                ) : (
+                                    <><Icon name="check" size={18} />Confirm Clock Out</>
+                                )}
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            );
+        };
+
+
+        // ============================================
+        // CLOCK IN PLAN MODAL COMPONENT
+        // ============================================
+        const ClockInPlanModal = ({ onCancel, onConfirm, loading, error }) => {
+            const [plan, setPlan] = useState('');
+            const canConfirm = plan.trim().length >= 3 && !loading;
+
+            return (
+                <div className="modal-overlay" style={{ zIndex: 10000 }}>
+                    <div className="modal" style={{ maxWidth: '500px' }}>
+                        <div className="modal-header">
+                            <h2 className="modal-title">Clock In</h2>
+                            <button className="close-btn" onClick={onCancel} disabled={loading}>
+                                <Icon name="x" size={20} />
+                            </button>
+                        </div>
+
+                        {error && (
+                            <div className="alert error">
+                                <Icon name="alertCircle" size={20} />
+                                {error}
+                            </div>
+                        )}
+
+                        <div className="form-group">
+                            <label className="form-label">What's your plan for today?</label>
+                            <textarea
+                                className="form-input"
+                                value={plan}
+                                onChange={(e) => setPlan(e.target.value)}
+                                placeholder="Briefly describe your plan for today"
+                                maxLength={2000}
+                                rows={5}
+                                disabled={loading}
+                                autoFocus
+                                style={{ resize: 'vertical', minHeight: '120px' }}
+                            />
+                            <div style={{ marginTop: '0.5rem', fontSize: '0.85rem', color: 'var(--text-light)', textAlign: 'right' }}>
+                                {plan.length}/2000
+                            </div>
+                        </div>
+
+                        <div className="modal-actions">
+                            <button
+                                type="button"
+                                className="btn btn-secondary"
+                                onClick={onCancel}
+                                disabled={loading}
+                                style={{ flex: 1 }}
+                            >
+                                Cancel
+                            </button>
+                            <button
+                                type="button"
+                                className="btn btn-primary"
+                                onClick={() => onConfirm(plan.trim())}
+                                disabled={!canConfirm}
+                                style={{ flex: 1 }}
+                            >
+                                {loading ? (
+                                    <><div className="spinner"></div>Clocking in...</>
+                                ) : (
+                                    <><Icon name="check" size={18} />Confirm Clock In</>
+                                )}
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            );
+        };
+
+        // ============================================
         // CLOCK IN / CLOCK OUT COMPONENT
         // ============================================
         const ClockInOut = ({ currentUser }) => {
@@ -2158,6 +2396,10 @@
             const [activePunch, setActivePunch] = useState(null);
             const [punchLoading, setPunchLoading] = useState(false);
             const [punchMessage, setPunchMessage] = useState(null);
+            const [showClockOutModal, setShowClockOutModal] = useState(false);
+            const [clockOutError, setClockOutError] = useState('');
+            const [showClockInModal, setShowClockInModal] = useState(false);
+            const [clockInError, setClockInError] = useState('');
             const [schedule, setSchedule] = useState(currentUser.schedule || null);
             const [capEnabled, setCapEnabled] = useState(currentUser.scheduleCapEnabled === true);
 
@@ -2259,28 +2501,30 @@
                 }
             };
 
-            const handleClockIn = async () => {
+            const handleClockIn = async (plan = '') => {
                 if (punchLoading || activePunch) return;
                 setPunchLoading(true);
-                setPunchMessage(null);
+                setClockInError('');
                 try {
                     const clockInDate = new Date().toLocaleDateString('en-CA');
-                    await runPunchCall('clockIn', { clockInDate });
+                    await runPunchCall('clockIn', { clockInDate, plan });
                     setPunchMessage({ type: 'success', text: 'Clocked in. The timer is running.' });
+                    setShowClockInModal(false);
                 } catch (err) {
                     console.error('Clock in failed:', err);
-                    setPunchMessage({ type: 'error', text: err.userMessage || 'Failed to clock in. Please try again.' });
+                    // Error renders inside the modal so the typed plan is preserved.
+                    setClockInError(err.userMessage || 'Failed to clock in. Please try again.');
                 } finally {
                     setPunchLoading(false);
                 }
             };
 
-            const handleClockOut = async (extendedTime = false) => {
+            const handleClockOut = async (extendedTime = false, notes = '') => {
                 if (punchLoading || !activePunch) return;
                 setPunchLoading(true);
-                setPunchMessage(null);
+                setClockOutError('');
                 try {
-                    const result = await runPunchCall('clockOut', { extendedTime });
+                    const result = await runPunchCall('clockOut', { extendedTime, notes });
                     let text;
                     if (result && result.extraLogged) {
                         text = `Clocked out. Logged your shift plus extra time — both pending review.`;
@@ -2291,9 +2535,11 @@
                         text = `Clocked out. Logged ${hoursStr} for review.`;
                     }
                     setPunchMessage({ type: 'success', text });
+                    setShowClockOutModal(false);
                 } catch (err) {
                     console.error('Clock out failed:', err);
-                    setPunchMessage({ type: 'error', text: err.userMessage || 'Failed to clock out. Please try again.' });
+                    // Error renders inside the modal so the typed note is preserved.
+                    setClockOutError(err.userMessage || 'Failed to clock out. Please try again.');
                 } finally {
                     setPunchLoading(false);
                 }
@@ -2344,7 +2590,7 @@
                                             <button
                                                 type="button"
                                                 className="btn btn-danger btn-punch"
-                                                onClick={() => handleClockOut(pastCap)}
+                                                onClick={() => { setPunchMessage(null); setClockOutError(''); setShowClockOutModal(true); }}
                                                 disabled={punchLoading}
                                             >
                                                 {punchLoading ? (
@@ -2368,7 +2614,7 @@
                                             <button
                                                 type="button"
                                                 className="btn btn-success btn-punch"
-                                                onClick={handleClockIn}
+                                                onClick={() => { setPunchMessage(null); setClockInError(''); setShowClockInModal(true); }}
                                                 disabled={punchLoading}
                                             >
                                                 {punchLoading ? (
@@ -2390,6 +2636,32 @@
                             </div>
                         </div>
                     </div>
+
+                    {showClockInModal && (
+                        <ClockInPlanModal
+                            loading={punchLoading}
+                            error={clockInError}
+                            onCancel={() => {
+                                if (punchLoading) return;
+                                setShowClockInModal(false);
+                                setClockInError('');
+                            }}
+                            onConfirm={(plan) => handleClockIn(plan)}
+                        />
+                    )}
+
+                    {showClockOutModal && (
+                        <ClockOutNotesModal
+                            loading={punchLoading}
+                            error={clockOutError}
+                            onCancel={() => {
+                                if (punchLoading) return;
+                                setShowClockOutModal(false);
+                                setClockOutError('');
+                            }}
+                            onConfirm={(notes) => handleClockOut(pastCap, notes)}
+                        />
+                    )}
                 </div>
             );
         };
@@ -3450,6 +3722,78 @@
 
                         {/* Work Schedule */}
                         <WorkScheduleCard user={user} />
+
+                        {/* Daily Notes */}
+                        <div className="content-card">
+                            <div className="card-header">
+                                <h2 className="card-title">Daily Notes</h2>
+                            </div>
+
+                            <div className="week-selector">
+                                <button className="icon-btn" onClick={previousWeek}>
+                                    <Icon name="chevronLeft" size={20} />
+                                </button>
+                                <div className="week-display">{formatWeekRange(currentWeek)}</div>
+                                <button
+                                    className="icon-btn"
+                                    onClick={nextWeek}
+                                    disabled={new Date(currentWeek).setDate(new Date(currentWeek).getDate() + 7) > Date.now()}
+                                >
+                                    <Icon name="chevronRight" size={20} />
+                                </button>
+                            </div>
+
+                            <div className="notes-week-grid">
+                                {Array.from({ length: 7 }, (_, i) => {
+                                    const day = new Date(currentWeek);
+                                    day.setDate(day.getDate() + i);
+                                    const dayKey = day.toLocaleDateString('en-CA');
+                                    const isToday = dayKey === new Date().toLocaleDateString('en-CA');
+                                    const dayLabel = `${day.toLocaleDateString('en-US', { weekday: 'short' })} ${day.getMonth() + 1}/${day.getDate()}`;
+                                    const dayEntries = weekEntries.filter(e => e.date === dayKey);
+                                    // Punches worth surfacing: a clock-out note and/or a clock-in plan.
+                                    const noteEntries = dayEntries.filter(e => (e.notes && e.notes.trim()) || (e.plan && e.plan.trim()));
+                                    // Collapse only "split" entries: one clock-out written as two docs
+                                    // (normal + extra/capped) shares an identical clockOutAt audit stamp.
+                                    // Separate punches with identical text stay distinct (fallback = id).
+                                    const seen = new Set();
+                                    const dedupedNotes = noteEntries.filter(entry => {
+                                        const text = entry.notes ? entry.notes.trim() : '';
+                                        const outKey = entry.clockOutAt && entry.clockOutAt.toMillis ? entry.clockOutAt.toMillis() : entry.id;
+                                        const key = `${outKey}|${text}`;
+                                        if (seen.has(key)) return false;
+                                        seen.add(key);
+                                        return true;
+                                    });
+                                    const showTimePrefix = dedupedNotes.length > 1;
+                                    const hasAnyNote = dayEntries.some(e => e.notes && e.notes.trim());
+
+                                    return (
+                                        <div key={dayKey} className={`notes-day-cell${isToday ? ' today' : ''}`}>
+                                            <div className="notes-day-header">{dayLabel}</div>
+                                            {dayEntries.length === 0 ? null : (
+                                                <>
+                                                    {dedupedNotes.map(entry => (
+                                                        <React.Fragment key={entry.id}>
+                                                            {entry.plan && entry.plan.trim() && (
+                                                                <NoteItem label="Plan:" text={entry.plan.trim()} />
+                                                            )}
+                                                            {entry.notes && entry.notes.trim() && (
+                                                                <NoteItem
+                                                                    time={showTimePrefix ? `${formatTimeDisplay(entry.startTime)}–${formatTimeDisplay(entry.endTime)}` : null}
+                                                                    text={entry.notes.trim()}
+                                                                />
+                                                            )}
+                                                        </React.Fragment>
+                                                    ))}
+                                                    {!hasAnyNote && <div className="notes-day-empty">No notes</div>}
+                                                </>
+                                            )}
+                                        </div>
+                                    );
+                                })}
+                            </div>
+                        </div>
 
                         {/* Time Entries by Week */}
                         <div className="content-card">
