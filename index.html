@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>TimeTrack Therappy Innovations Team</title>
+    <title>TimeTrack Therapy Innovations Team</title>
     
     <!-- Firebase SDKs -->
     <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-app-compat.js"></script>
@@ -3537,6 +3537,13 @@
             const [editEnd, setEditEnd] = useState('');
             const [editDate, setEditDate] = useState('');
             const [loading, setLoading] = useState(true);
+            const [showResetPassword, setShowResetPassword] = useState(false);
+            const [resetLoading, setResetLoading] = useState('');
+            const [resetError, setResetError] = useState('');
+            const [resetMessage, setResetMessage] = useState('');
+            const [resetLink, setResetLink] = useState('');
+            const [linkCopied, setLinkCopied] = useState(false);
+            const [copyError, setCopyError] = useState('');
 
             useEffect(() => {
                 // Live user data so schedule edits reflect immediately
@@ -3655,6 +3662,112 @@
                 }
             };
 
+            const openResetPassword = () => {
+                setResetLoading('');
+                setResetError('');
+                setResetMessage('');
+                setResetLink('');
+                setLinkCopied(false);
+                setCopyError('');
+                setShowResetPassword(true);
+            };
+
+            const closeResetPassword = () => {
+                // Closing mid-call is allowed: any in-flight promise resolves into
+                // state that is no longer rendered, and reopening resets everything.
+                setShowResetPassword(false);
+                setResetLoading('');
+                setResetError('');
+                setResetMessage('');
+                setResetLink('');
+                setLinkCopied(false);
+                setCopyError('');
+            };
+
+            // Callable errors surface as err.code (e.g. 'functions/not-found') on the compat SDK,
+            // with any server-attached detail code on err.details.code.
+            const describeResetError = (error, fallback) => {
+                const code = (error && error.code) || '';
+                const detailCode = error && error.details && error.details.code;
+                if (detailCode === 'AUTH_ACCOUNT_MISSING') {
+                    return "This employee has no sign-in account yet, so there's no password to reset.";
+                }
+                if (code === 'functions/not-found' || code === 'not-found') {
+                    return "Password reset isn't available yet — the server function still needs to be deployed.";
+                }
+                if (code === 'functions/internal' || code === 'internal') {
+                    return 'Something went wrong on the server. Please try again.';
+                }
+                if (code === 'functions/permission-denied' || code === 'permission-denied') {
+                    return "You don't have permission to reset passwords.";
+                }
+                return fallback;
+            };
+
+            const handleSendResetEmail = async () => {
+                if (resetLoading) return;
+                setResetLoading('email');
+                setResetError('');
+                setResetMessage('');
+                setResetLink('');
+                setLinkCopied(false);
+                setCopyError('');
+                try {
+                    // Verify the Auth account server-side first: with email-enumeration
+                    // protection on, sendPasswordResetEmail resolves even for addresses
+                    // that have no account. The server also returns the canonical Auth
+                    // email, which can differ from the Firestore copy.
+                    const fn = functions.httpsCallable('adminGeneratePasswordResetLink');
+                    const result = await fn({ targetUid: userId, verifyOnly: true });
+                    const authEmail = result.data.email;
+                    await auth.sendPasswordResetEmail(authEmail);
+                    setResetMessage('Password reset link sent to ' + authEmail + '.');
+                } catch (error) {
+                    console.error('Error sending password reset email:', error);
+                    setResetError(describeResetError(error, "Couldn't send the reset email. Please try again."));
+                }
+                setResetLoading('');
+            };
+
+            const handleGenerateResetLink = async () => {
+                if (resetLoading) return;
+                setResetLoading('link');
+                setResetError('');
+                setResetMessage('');
+                setResetLink('');
+                setLinkCopied(false);
+                setCopyError('');
+                try {
+                    const fn = functions.httpsCallable('adminGeneratePasswordResetLink');
+                    const result = await fn({ targetUid: userId });
+                    setResetLink(result.data.link);
+                } catch (error) {
+                    console.error('Error generating password reset link:', error);
+                    setResetError(describeResetError(error, "Couldn't generate the reset link. Please try again."));
+                }
+                setResetLoading('');
+            };
+
+            const handleCopyResetLink = async () => {
+                try {
+                    await navigator.clipboard.writeText(resetLink);
+                    setCopyError('');
+                    setLinkCopied(true);
+                    setTimeout(() => setLinkCopied(false), 2000);
+                } catch (error) {
+                    // Clipboard API is unavailable on non-HTTPS origins - select the text instead
+                    const linkEl = document.getElementById('reset-link-text');
+                    if (linkEl) {
+                        const range = document.createRange();
+                        range.selectNodeContents(linkEl);
+                        const selection = window.getSelection();
+                        selection.removeAllRanges();
+                        selection.addRange(range);
+                    }
+                    setCopyError('Could not copy automatically. The link is selected - press Ctrl/Cmd + C to copy it.');
+                }
+            };
+
             const timeOptions = [];
             for (let h = 0; h < 24; h++) {
                 timeOptions.push({ value: h, label: formatTimeDisplay(h) });
@@ -3688,14 +3801,24 @@
                         <div className="content-card">
                             <div className="card-header">
                                 <h2 className="card-title">Employee Information</h2>
-                                <button 
-                                    className="btn btn-danger" 
-                                    onClick={handleDeleteUser}
-                                    style={{ fontSize: '0.9rem', padding: '0.5rem 1rem' }}
-                                >
-                                    <Icon name="trash" size={16} />
-                                    Delete User
-                                </button>
+                                <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
+                                    <button
+                                        className="btn btn-secondary"
+                                        onClick={openResetPassword}
+                                        style={{ fontSize: '0.9rem', padding: '0.5rem 1rem' }}
+                                    >
+                                        <Icon name="settings" size={16} />
+                                        Reset Password
+                                    </button>
+                                    <button
+                                        className="btn btn-danger"
+                                        onClick={handleDeleteUser}
+                                        style={{ fontSize: '0.9rem', padding: '0.5rem 1rem' }}
+                                    >
+                                        <Icon name="trash" size={16} />
+                                        Delete User
+                                    </button>
+                                </div>
                             </div>
 
                             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(250px, 1fr))', gap: '2rem' }}>
@@ -3982,6 +4105,102 @@
                                     <button className="btn btn-primary" onClick={handleSaveEdit} style={{ flex: 1 }}>
                                         <Icon name="check" size={18} />
                                         Save Changes
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    )}
+
+                    {/* Reset Password Modal */}
+                    {showResetPassword && (
+                        <div className="modal-overlay" style={{ zIndex: 10000 }}>
+                            <div className="modal" style={{ maxWidth: '500px' }}>
+                                <div className="modal-header">
+                                    <h2 className="modal-title">Reset Password</h2>
+                                    <button className="close-btn" onClick={closeResetPassword}>
+                                        <Icon name="x" size={20} />
+                                    </button>
+                                </div>
+
+                                <p style={{ marginBottom: '1.5rem', color: 'var(--text-light)' }}>
+                                    Reset password for {user.firstName} {user.lastName} ({user.email})
+                                </p>
+
+                                {resetError && (
+                                    <div className="alert error">
+                                        <Icon name="alertCircle" size={20} />
+                                        {resetError}
+                                    </div>
+                                )}
+
+                                {resetMessage && (
+                                    <div className="alert success">
+                                        <Icon name="checkCircle" size={20} />
+                                        {resetMessage}
+                                    </div>
+                                )}
+
+                                {resetLink && (
+                                    <div className="form-group">
+                                        <label className="form-label">Password Reset Link</label>
+                                        <div
+                                            id="reset-link-text"
+                                            style={{
+                                                background: 'var(--info-light)',
+                                                padding: '0.75rem',
+                                                borderRadius: '12px',
+                                                fontFamily: 'monospace',
+                                                fontSize: '0.8rem',
+                                                wordBreak: 'break-all',
+                                                userSelect: 'all',
+                                                color: 'var(--text-primary)'
+                                            }}
+                                        >
+                                            {resetLink}
+                                        </div>
+                                        <button
+                                            className="btn btn-secondary"
+                                            onClick={handleCopyResetLink}
+                                            style={{ marginTop: '0.75rem', fontSize: '0.9rem', padding: '0.5rem 1rem' }}
+                                        >
+                                            {linkCopied && <Icon name="check" size={16} />}
+                                            {linkCopied ? 'Copied!' : 'Copy Link'}
+                                        </button>
+                                        {copyError && (
+                                            <div style={{ marginTop: '0.5rem', fontSize: '0.8rem', color: 'var(--danger)' }}>
+                                                {copyError}
+                                            </div>
+                                        )}
+                                    </div>
+                                )}
+
+                                <div style={{ fontSize: '0.85rem', color: 'var(--text-light)' }}>
+                                    Reset links usually expire within an hour.
+                                </div>
+
+                                <div className="modal-actions" style={{ flexWrap: 'wrap' }}>
+                                    <button
+                                        className="btn btn-secondary"
+                                        onClick={handleSendResetEmail}
+                                        disabled={!!resetLoading}
+                                        style={{ flex: 1 }}
+                                    >
+                                        {resetLoading === 'email' ? 'Sending...' : 'Email the Link'}
+                                    </button>
+                                    <button
+                                        className="btn btn-primary"
+                                        onClick={handleGenerateResetLink}
+                                        disabled={!!resetLoading}
+                                        style={{ flex: 1 }}
+                                    >
+                                        {resetLoading === 'link' ? 'Generating...' : 'Show Link to Copy'}
+                                    </button>
+                                    <button
+                                        className="btn btn-secondary"
+                                        onClick={closeResetPassword}
+                                        style={{ flex: 1 }}
+                                    >
+                                        {resetMessage || resetLink ? 'Done' : 'Cancel'}
                                     </button>
                                 </div>
                             </div>
