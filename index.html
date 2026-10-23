@@ -1494,8 +1494,21 @@
             return formatTimeDisplay(timeToDecimal(hhmm));
         };
 
+        const formatElapsed = (ms) => {
+            if (ms < 0) ms = 0;
+            const totalSeconds = Math.floor(ms / 1000);
+            const h = Math.floor(totalSeconds / 3600);
+            const m = Math.floor((totalSeconds % 3600) / 60);
+            const s = totalSeconds % 60;
+            return `${h.toString().padStart(2, '0')}:${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
+        };
+
         const ExtraTimeBadge = () => (
             <span style={{ marginLeft: '0.5rem', padding: '2px 8px', borderRadius: '999px', background: 'var(--warning-light, #fde68a)', color: 'var(--warning, #b45309)', fontSize: '0.7rem', fontWeight: 700, letterSpacing: '0.5px' }}>EXTRA TIME</span>
+        );
+
+        const StoppedByAdminBadge = () => (
+            <span style={{ marginLeft: '0.5rem', padding: '2px 8px', borderRadius: '999px', background: 'var(--danger-light, #fee2e2)', color: 'var(--danger, #b91c1c)', fontSize: '0.7rem', fontWeight: 700, letterSpacing: '0.5px' }}>STOPPED BY ADMIN</span>
         );
 
         // Icons Component
@@ -2188,6 +2201,7 @@
                                                 <td>
                                                     {new Date(entry.date + 'T00:00:00').toLocaleDateString()}
                                                     {entry.isExtraTime && <ExtraTimeBadge />}
+                                                    {entry.stoppedByAdmin && <StoppedByAdminBadge />}
                                                     <LocationChip entry={entry} />
                                                 </td>
                                                 <td><ClockTime entry={entry} which="start" /></td>
@@ -2447,15 +2461,6 @@
                 const ts = activePunch.clockInAt;
                 if (!ts) return null;
                 return typeof ts.toDate === 'function' ? ts.toDate() : new Date(ts);
-            };
-
-            const formatElapsed = (ms) => {
-                if (ms < 0) ms = 0;
-                const totalSeconds = Math.floor(ms / 1000);
-                const h = Math.floor(totalSeconds / 3600);
-                const m = Math.floor((totalSeconds % 3600) / 60);
-                const s = totalSeconds % 60;
-                return `${h.toString().padStart(2, '0')}:${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
             };
 
             const runPunchCall = async (callableName, extraPayload) => {
@@ -3148,6 +3153,7 @@
                                                         <td>
                                                             {new Date(entry.date + 'T00:00:00').toLocaleDateString()}
                                                             {entry.isExtraTime && <ExtraTimeBadge />}
+                                                            {entry.stoppedByAdmin && <StoppedByAdminBadge />}
                                                             <LocationChip entry={entry} />
                                                         </td>
                                                         <td><ClockTime entry={entry} which="start" /></td>
@@ -3958,6 +3964,7 @@
                                                     <td>
                                                         {new Date(entry.date + 'T00:00:00').toLocaleDateString()}
                                                         {entry.isExtraTime && <ExtraTimeBadge />}
+                                                        {entry.stoppedByAdmin && <StoppedByAdminBadge />}
                                                         <LocationChip entry={entry} />
                                                     </td>
                                                     <td><ClockTime entry={entry} which="start" /></td>
@@ -4378,6 +4385,7 @@
                                                 <td>
                                                     {new Date(entry.date + 'T00:00:00').toLocaleDateString()}
                                                     {entry.isExtraTime && <ExtraTimeBadge />}
+                                                    {entry.stoppedByAdmin && <StoppedByAdminBadge />}
                                                     <LocationChip entry={entry} />
                                                 </td>
                                                 <td><ClockTime entry={entry} which="start" /></td>
