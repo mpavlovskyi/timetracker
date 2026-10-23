@@ -1840,6 +1840,7 @@
         const Sidebar = ({ currentUser, currentPage, onNavigate, onLogout, open, onToggle, onClose }) => {
             const adminNavItems = [
                 { id: 'dashboard', label: 'Dashboard', icon: 'dashboard' },
+                { id: 'live-now', label: 'Live Now', icon: 'clock' },
                 { id: 'clock', label: 'Log Time', icon: 'clock' },
                 { id: 'profile', label: 'My Profile', icon: 'user' },
                 { id: 'manage-users', label: 'Users', icon: 'users' },
@@ -1853,6 +1854,16 @@
                 { id: 'profile', label: 'My Profile', icon: 'user' },
                 { id: 'schedule', label: 'My Schedule', icon: 'calendar' },
             ];
+
+            const [liveCount, setLiveCount] = useState(0);
+            useEffect(() => {
+                if (currentUser.role !== 'admin') return;
+                const unsub = db.collection('activePunches').onSnapshot(
+                    snap => setLiveCount(snap.size),
+                    err => console.error('liveCount listener error:', err)
+                );
+                return () => unsub();
+            }, [currentUser.role]);
 
             const navItems = currentUser.role === 'admin' ? adminNavItems : userNavItems;
 
@@ -1899,6 +1910,9 @@
                                 >
                                     <Icon name={item.icon} size={20} />
                                     <span>{item.label}</span>
+                                    {item.id === 'live-now' && liveCount > 0 && (
+                                        <span style={{ marginLeft: 'auto', minWidth: '22px', padding: '0 6px', borderRadius: '999px', background: 'var(--success, #16a34a)', color: '#fff', fontSize: '0.75rem', fontWeight: 700, textAlign: 'center' }}>{liveCount}</span>
+                                    )}
                                 </div>
                             ))}
                         </div>
@@ -2672,6 +2686,246 @@
         };
 
 
+
+        // ============================================
+        // ADMIN STOP CLOCK MODAL
+        // ============================================
+        const AdminStopModal = ({ punch, elapsedText, onCancel, onConfirm, loading, error }) => {
+            const [reason, setReason] = useState('');
+            const canConfirm = reason.trim().length >= 3 && !loading;
+
+            return (
+                <div className="modal-overlay" style={{ zIndex: 10000 }}>
+                    <div className="modal" style={{ maxWidth: '500px' }}>
+                        <div className="modal-header">
+                            <h2 className="modal-title">Stop {punch.userName || punch.userEmail}'s clock</h2>
+                            <button className="close-btn" onClick={onCancel} disabled={loading}>
+                                <Icon name="x" size={20} />
+                            </button>
+                        </div>
+
+                        <p style={{ marginBottom: '1rem', color: 'var(--text-light)' }}>
+                            Running for <strong>{elapsedText}</strong>. The shift will be saved as a pending entry ending now.
+                        </p>
+
+                        {error && (
+                            <div className="alert error">
+                                <Icon name="alertCircle" size={20} />
+                                {error}
+                            </div>
+                        )}
+
+                        <div className="form-group">
+                            <label className="form-label">Reason</label>
+                            <textarea
+                                className="form-input"
+                                value={reason}
+                                onChange={(e) => setReason(e.target.value)}
+                                placeholder="e.g. Forgot to clock out"
+                                maxLength={2000}
+                                rows={4}
+                                disabled={loading}
+                                autoFocus
+                                style={{ resize: 'vertical', minHeight: '100px' }}
+                            />
+                        </div>
+
+                        <div className="modal-actions">
+                            <button type="button" className="btn btn-secondary" onClick={onCancel} disabled={loading} style={{ flex: 1 }}>
+                                Cancel
+                            </button>
+                            <button type="button" className="btn btn-danger" onClick={() => onConfirm(reason.trim())} disabled={!canConfirm} style={{ flex: 1 }}>
+                                {loading ? (
+                                    <><div className="spinner"></div>Stopping...</>
+                                ) : (
+                                    <><Icon name="clock" size={18} />Stop Clock</>
+                                )}
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            );
+        };
+
+        // ============================================
+        // ADMIN LIVE NOW COMPONENT
+        // ============================================
+        const LIVE_LONG_SHIFT_HOURS = 10;
+
+        const LiveNow = () => {
+            const [punches, setPunches] = useState([]);
+            const [usersById, setUsersById] = useState({});
+            const [loading, setLoading] = useState(true);
+            const [currentTime, setCurrentTime] = useState(new Date());
+            const [stopTarget, setStopTarget] = useState(null);
+            const [stopLoading, setStopLoading] = useState(false);
+            const [stopError, setStopError] = useState('');
+            const [message, setMessage] = useState(null);
+
+            useEffect(() => {
+                const timer = setInterval(() => setCurrentTime(new Date()), 1000);
+                return () => clearInterval(timer);
+            }, []);
+
+            useEffect(() => {
+                const unsubPunches = db.collection('activePunches').onSnapshot(snapshot => {
+                    setPunches(snapshot.docs.map(doc => ({ uid: doc.id, ...doc.data() })));
+                    setLoading(false);
+                }, err => {
+                    console.error('activePunches listener error:', err);
+                    setLoading(false);
+                });
+                const unsubUsers = db.collection('users').onSnapshot(snapshot => {
+                    const map = {};
+                    snapshot.docs.forEach(doc => { map[doc.id] = doc.data(); });
+                    setUsersById(map);
+                });
+                return () => { unsubPunches(); unsubUsers(); };
+            }, []);
+
+            const clockInMs = (p) => toDateOrNull(p.clockInAt)?.getTime() ?? currentTime.getTime();
+            const sorted = [...punches].sort((a, b) => clockInMs(a) - clockInMs(b));
+
+            // Past today's scheduled end (if the user has one) or a long-shift fallback.
+            const isOverdue = (p) => {
+                const u = usersById[p.uid];
+                const anchor = p.clockInDate ? new Date(p.clockInDate + 'T00:00:00') : currentTime;
+                const shift = u && u.schedule ? getScheduleForToday(u.schedule, anchor) : null;
+                if (shift) {
+                    const nowDecimal = currentTime.getHours() + currentTime.getMinutes() / 60;
+                    const sameDay = p.clockInDate === currentTime.toLocaleDateString('en-CA');
+                    return !sameDay || nowDecimal > timeToDecimal(shift.end);
+                }
+                return currentTime.getTime() - clockInMs(p) > LIVE_LONG_SHIFT_HOURS * 3600 * 1000;
+            };
+
+            const handleStop = async (reason) => {
+                if (!stopTarget || stopLoading) return;
+                const name = stopTarget.userName || stopTarget.userEmail;
+                setStopLoading(true);
+                setStopError('');
+                try {
+                    const fn = functions.httpsCallable('adminClockOut');
+                    const result = (await fn({ targetUid: stopTarget.uid, reason })).data;
+                    setMessage({
+                        type: 'success',
+                        text: result.discarded
+                            ? `Stopped ${name} — shift under 1 minute, nothing logged.`
+                            : `Stopped ${name} — ${formatHoursWorked(result.hours)} logged (pending approval).`
+                    });
+                    setStopTarget(null);
+                } catch (err) {
+                    const detailCode = err && err.details && err.details.code;
+                    if (detailCode === 'NOT_CLOCKED_IN') {
+                        setMessage({ type: 'info', text: `${name} already clocked out.` });
+                        setStopTarget(null);
+                    } else {
+                        console.error('adminClockOut failed:', err);
+                        setStopError(err && err.message ? err.message : 'Failed to stop clock. Please try again.');
+                    }
+                } finally {
+                    setStopLoading(false);
+                }
+            };
+
+            return (
+                <div className="main-content">
+                    <div className="main-header">
+                        <h1>Live Now</h1>
+                        <p>Everyone currently clocked in, updating in real time</p>
+                    </div>
+
+                    <div className="main-body">
+                        {message && (
+                            <div className={`alert ${message.type}`} style={{ marginBottom: '1rem' }}>
+                                <Icon name={message.type === 'success' ? 'checkCircle' : 'info'} size={20} />
+                                {message.text}
+                            </div>
+                        )}
+
+                        <div className="content-card">
+                            {loading ? (
+                                <div style={{ padding: '2rem', textAlign: 'center' }}><div className="spinner"></div></div>
+                            ) : sorted.length === 0 ? (
+                                <div style={{ padding: '2rem', textAlign: 'center', color: 'var(--text-light)' }}>
+                                    No one is clocked in right now.
+                                </div>
+                            ) : (
+                                <table className="data-table">
+                                    <thead>
+                                        <tr>
+                                            <th>Employee</th>
+                                            <th>Clocked in</th>
+                                            <th>Elapsed</th>
+                                            <th>Plan</th>
+                                            <th>Actions</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        {sorted.map(p => {
+                                            const inDate = toDateOrNull(p.clockInAt);
+                                            const overdue = isOverdue(p);
+                                            const localZone = p.clockInTimeZone;
+                                            return (
+                                                <tr key={p.uid} style={overdue ? { background: 'var(--warning-light, #fef3c7)' } : undefined}>
+                                                    <td>
+                                                        <div style={{ fontWeight: '600' }}>{p.userName || p.userEmail}</div>
+                                                        <div style={{ fontSize: '0.8rem', color: 'var(--text-light)' }}>{p.userEmail}</div>
+                                                    </td>
+                                                    <td>
+                                                        {inDate ? (
+                                                            <>
+                                                                <div>{formatInZone(inDate, OFFICE_TZ_DISPLAY)} CT</div>
+                                                                {localZone && localZone !== OFFICE_TZ_DISPLAY && (
+                                                                    <div style={{ fontSize: '0.8rem', color: 'var(--text-light)' }}>
+                                                                        {formatInZone(inDate, localZone)} {zoneLabel(localZone)}
+                                                                    </div>
+                                                                )}
+                                                            </>
+                                                        ) : '—'}
+                                                    </td>
+                                                    <td style={{ fontVariantNumeric: 'tabular-nums', fontWeight: 700 }}>
+                                                        {formatElapsed(currentTime.getTime() - clockInMs(p))}
+                                                        {overdue && (
+                                                            <div style={{ fontSize: '0.75rem', color: 'var(--warning, #b45309)', fontWeight: 600 }}>Past scheduled end</div>
+                                                        )}
+                                                    </td>
+                                                    <td style={{ maxWidth: '280px' }}>
+                                                        <div title={p.plan || ''} style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                                                            {p.plan || '—'}
+                                                        </div>
+                                                    </td>
+                                                    <td>
+                                                        <button
+                                                            type="button"
+                                                            className="btn btn-danger"
+                                                            onClick={() => { setMessage(null); setStopError(''); setStopTarget(p); }}
+                                                        >
+                                                            Stop
+                                                        </button>
+                                                    </td>
+                                                </tr>
+                                            );
+                                        })}
+                                    </tbody>
+                                </table>
+                            )}
+                        </div>
+                    </div>
+
+                    {stopTarget && (
+                        <AdminStopModal
+                            punch={stopTarget}
+                            elapsedText={formatElapsed(currentTime.getTime() - clockInMs(stopTarget))}
+                            loading={stopLoading}
+                            error={stopError}
+                            onCancel={() => { if (!stopLoading) { setStopTarget(null); setStopError(''); } }}
+                            onConfirm={handleStop}
+                        />
+                    )}
+                </div>
+            );
+        };
 
         // ============================================
         // ADMIN LOG TIME FOR USERS COMPONENT
@@ -5057,6 +5311,10 @@
 
                     {currentPage === 'approve-time' && currentUser.role === 'admin' && (
                         <ApproveTime />
+                    )}
+
+                    {currentPage === 'live-now' && currentUser.role === 'admin' && (
+                        <LiveNow />
                     )}
 
                     {currentPage === 'create-user' && currentUser.role === 'admin' && (
