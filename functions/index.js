@@ -4,7 +4,8 @@ const { defineString } = require('firebase-functions/params');
 const admin = require('firebase-admin');
 const ipaddr = require('ipaddr.js');
 const { punchLocationFields, entryAuditFields } = require('./lib/punchFields');
-const { timeDecimalInTz, localDateStringInTz, getScheduleEndForDate } = require('./lib/time');
+const { localDateStringInTz, getScheduleEndForDate, shiftDecimals } = require('./lib/time');
+const { buildClockOutEntries } = require('./lib/clockOutEntries');
 
 admin.initializeApp();
 const db = admin.firestore();
@@ -213,6 +214,52 @@ async function locationCheck({ uid, user, coords, rawRequest, action }) {
   return { ip, ipOk: false, distance };
 }
 
+/**
+ * Turns an active punch into timeEntries and deletes the punch, using the given
+ * transaction. Caller must have read punchRef in the same transaction.
+ * Returns { hours, entryId, extraEntryId, capped, extraLogged }.
+ */
+function writeClockOut(tx, { punchRef, punch, user, now, notes, extendedTime, extraFields, data }) {
+  const clockIn = punch.clockInAt.toDate();
+  const tz = OFFICE_TIMEZONE.value();
+  const { startDecimal, endDecimal, totalHours } = shiftDecimals(clockIn, now, tz);
+
+  const capDecimal = user.scheduleCapEnabled === true
+    ? getScheduleEndForDate(user.schedule, punch.clockInDate)
+    : null;
+
+  const clockOutAt = admin.firestore.Timestamp.fromDate(now);
+  const entryBase = {
+    userId: punch.userId,
+    userEmail: user.email,
+    userName: `${user.firstName || ''} ${user.lastName || ''}`.trim(),
+    date: punch.clockInDate,
+    status: 'pending',
+    source: 'clock',
+    notes,
+    ...(typeof punch.plan === 'string' && punch.plan ? { plan: punch.plan } : {}),
+    submittedAt: admin.firestore.FieldValue.serverTimestamp(),
+    ...entryAuditFields(punch, punch.clockInAt, clockOutAt, data),
+    ...(extraFields || {})
+  };
+
+  const { entries, capped, extraLogged } = buildClockOutEntries({
+    startDecimal, endDecimal, totalHours, capDecimal, extendedTime, entryBase
+  });
+
+  let entryId = null;
+  let extraEntryId = null;
+  for (const { role, data: entryData } of entries) {
+    const ref = db.collection('timeEntries').doc();
+    tx.set(ref, entryData);
+    if (role === 'extra') extraEntryId = ref.id;
+    else entryId = ref.id;
+  }
+  tx.delete(punchRef);
+
+  return { hours: totalHours, entryId, extraEntryId, capped, extraLogged };
+}
+
 // ---------------------------------------------------------------------------
 // Callables
 // ---------------------------------------------------------------------------
@@ -265,116 +312,31 @@ exports.clockOut = onCall({ cors: ALLOWED_ORIGINS }, async (request) => {
   }
   const uid = request.auth.uid;
   const data = request.data || {};
-  const coords = data.coords || null;
   const extendedTime = data.extendedTime === true;
 
   const user = await getUserDoc(uid);
   // Location gate removed: clock-out succeeds from anywhere.
-
-  const punchRef = db.collection('activePunches').doc(uid);
-  const punchSnap = await punchRef.get();
-  if (!punchSnap.exists) {
-    throw new HttpsError('failed-precondition', 'No active punch found.', { code: 'NOT_CLOCKED_IN' });
-  }
-
-  const punch = punchSnap.data();
-  const clockIn = punch.clockInAt.toDate();
-  const now = new Date();
-  const elapsedMs = now.getTime() - clockIn.getTime();
-
-  if (elapsedMs < 60 * 1000) {
-    throw new HttpsError('failed-precondition', 'Shift too short to log (under 1 minute).', { code: 'SHIFT_TOO_SHORT' });
-  }
 
   const notes = typeof data.notes === 'string' ? data.notes.trim() : null;
   if (notes === null || notes.length < 3 || notes.length > 2000) {
     throw new HttpsError('invalid-argument', 'Please describe what you did today before clocking out.');
   }
 
-  const totalHours = elapsedMs / (1000 * 60 * 60);
-  const tz = OFFICE_TIMEZONE.value();
-  const startDecimal = timeDecimalInTz(clockIn, tz);
-  let endDecimal = timeDecimalInTz(now, tz);
-  if (endDecimal <= startDecimal) endDecimal = startDecimal + totalHours;
-
-  const capEnabled = user.scheduleCapEnabled === true;
-  const capDecimal = capEnabled ? getScheduleEndForDate(user.schedule, punch.clockInDate) : null;
-  const pastCap = capDecimal !== null && endDecimal > capDecimal;
-
-  const clockOutAt = admin.firestore.Timestamp.fromDate(now);
-  const entryBase = {
-    userId: uid,
-    userEmail: user.email,
-    userName: `${user.firstName || ''} ${user.lastName || ''}`.trim(),
-    date: punch.clockInDate,
-    status: 'pending',
-    source: 'clock',
-    notes,
-    ...(typeof punch.plan === 'string' && punch.plan ? { plan: punch.plan } : {}),
-    submittedAt: admin.firestore.FieldValue.serverTimestamp(),
-    ...entryAuditFields(punch, punch.clockInAt, clockOutAt, data)
-  };
-
-  const batch = db.batch();
-  let primaryEntryId = null;
-  let extraEntryId = null;
-
-  if (pastCap && extendedTime) {
-    // Split: normal portion up to cap, plus an EXTRA TIME entry for the overflow.
-    if (startDecimal < capDecimal) {
-      const normalRef = db.collection('timeEntries').doc();
-      batch.set(normalRef, {
-        ...entryBase,
-        startTime: startDecimal,
-        endTime: capDecimal,
-        hours: capDecimal - startDecimal
-      });
-      primaryEntryId = normalRef.id;
+  const punchRef = db.collection('activePunches').doc(uid);
+  const result = await db.runTransaction(async (tx) => {
+    const punchSnap = await tx.get(punchRef);
+    if (!punchSnap.exists) {
+      throw new HttpsError('failed-precondition', 'No active punch found.', { code: 'NOT_CLOCKED_IN' });
     }
-    const extraRef = db.collection('timeEntries').doc();
-    const extraStart = Math.max(startDecimal, capDecimal);
-    batch.set(extraRef, {
-      ...entryBase,
-      startTime: extraStart,
-      endTime: endDecimal,
-      hours: endDecimal - extraStart,
-      isExtraTime: true
-    });
-    extraEntryId = extraRef.id;
-  } else if (pastCap) {
-    // Silent clamp to cap.
-    const entryRef = db.collection('timeEntries').doc();
-    const cappedEnd = Math.max(capDecimal, startDecimal);
-    batch.set(entryRef, {
-      ...entryBase,
-      startTime: startDecimal,
-      endTime: cappedEnd,
-      hours: Math.max(0, cappedEnd - startDecimal),
-      capped: true
-    });
-    primaryEntryId = entryRef.id;
-  } else {
-    const entryRef = db.collection('timeEntries').doc();
-    batch.set(entryRef, {
-      ...entryBase,
-      startTime: startDecimal,
-      endTime: endDecimal,
-      hours: totalHours
-    });
-    primaryEntryId = entryRef.id;
-  }
+    const punch = punchSnap.data();
+    const now = new Date();
+    if (now.getTime() - punch.clockInAt.toDate().getTime() < 60 * 1000) {
+      throw new HttpsError('failed-precondition', 'Shift too short to log (under 1 minute).', { code: 'SHIFT_TOO_SHORT' });
+    }
+    return writeClockOut(tx, { punchRef, punch, user, now, notes, extendedTime, extraFields: null, data });
+  });
 
-  batch.delete(punchRef);
-  await batch.commit();
-
-  return {
-    ok: true,
-    hours: totalHours,
-    entryId: primaryEntryId,
-    extraEntryId,
-    capped: pastCap && !extendedTime,
-    extraLogged: pastCap && extendedTime
-  };
+  return { ok: true, ...result };
 });
 
 // ---------------------------------------------------------------------------
