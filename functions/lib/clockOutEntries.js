@@ -2,7 +2,8 @@
 
 /**
  * Decides which timeEntries a clock-out produces. Pure: no Firestore.
- * Returns { entries: [{ role: 'primary'|'extra', data }], capped, extraLogged }.
+ * Returns { entries: [{ role: 'primary'|'extra', data }], capped, extraLogged, loggedHours }.
+ * loggedHours is the sum of the entries' hours (after any clamp), not raw elapsed time.
  */
 function buildClockOutEntries({ startDecimal, endDecimal, totalHours, capDecimal, extendedTime: rawExtended, entryBase }) {
   // Strict boolean: a truthy non-boolean must not take the split branch or leak into flags.
@@ -37,7 +38,8 @@ function buildClockOutEntries({ startDecimal, endDecimal, totalHours, capDecimal
     });
   }
 
-  return { entries, capped: pastCap && !extendedTime, extraLogged: pastCap && extendedTime };
+  const loggedHours = entries.reduce((sum, e) => sum + e.data.hours, 0);
+  return { entries, capped: pastCap && !extendedTime, extraLogged: pastCap && extendedTime, loggedHours };
 }
 
 module.exports = { buildClockOutEntries };

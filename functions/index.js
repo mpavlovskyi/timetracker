@@ -217,7 +217,8 @@ async function locationCheck({ uid, user, coords, rawRequest, action }) {
 /**
  * Turns an active punch into timeEntries and deletes the punch, using the given
  * transaction. Caller must have read punchRef in the same transaction.
- * Returns { hours, entryId, extraEntryId, capped, extraLogged }.
+ * Returns { hours, loggedHours, entryId, extraEntryId, capped, extraLogged }.
+ * hours is raw elapsed time; loggedHours is what the entries actually record.
  */
 function writeClockOut(tx, { punchRef, punch, user, now, notes, extendedTime, extraFields, data }) {
   const clockIn = punch.clockInAt.toDate();
@@ -243,7 +244,7 @@ function writeClockOut(tx, { punchRef, punch, user, now, notes, extendedTime, ex
     ...(extraFields || {})
   };
 
-  const { entries, capped, extraLogged } = buildClockOutEntries({
+  const { entries, capped, extraLogged, loggedHours } = buildClockOutEntries({
     startDecimal, endDecimal, totalHours, capDecimal, extendedTime, entryBase
   });
 
@@ -257,7 +258,7 @@ function writeClockOut(tx, { punchRef, punch, user, now, notes, extendedTime, ex
   }
   tx.delete(punchRef);
 
-  return { hours: totalHours, entryId, extraEntryId, capped, extraLogged };
+  return { hours: totalHours, loggedHours, entryId, extraEntryId, capped, extraLogged };
 }
 
 // ---------------------------------------------------------------------------
@@ -317,11 +318,6 @@ exports.clockOut = onCall({ cors: ALLOWED_ORIGINS }, async (request) => {
   const user = await getUserDoc(uid);
   // Location gate removed: clock-out succeeds from anywhere.
 
-  const notes = typeof data.notes === 'string' ? data.notes.trim() : null;
-  if (notes === null || notes.length < 3 || notes.length > 2000) {
-    throw new HttpsError('invalid-argument', 'Please describe what you did today before clocking out.');
-  }
-
   const punchRef = db.collection('activePunches').doc(uid);
   const result = await db.runTransaction(async (tx) => {
     const punchSnap = await tx.get(punchRef);
@@ -332,6 +328,10 @@ exports.clockOut = onCall({ cors: ALLOWED_ORIGINS }, async (request) => {
     const now = new Date();
     if (now.getTime() - punch.clockInAt.toDate().getTime() < 60 * 1000) {
       throw new HttpsError('failed-precondition', 'Shift too short to log (under 1 minute).', { code: 'SHIFT_TOO_SHORT' });
+    }
+    const notes = typeof data.notes === 'string' ? data.notes.trim() : null;
+    if (notes === null || notes.length < 3 || notes.length > 2000) {
+      throw new HttpsError('invalid-argument', 'Please describe what you did today before clocking out.');
     }
     return writeClockOut(tx, { punchRef, punch, user, now, notes, extendedTime, extraFields: null, data });
   });
@@ -391,7 +391,7 @@ exports.adminClockOut = onCall({ cors: ALLOWED_ORIGINS }, async (request) => {
     // Under the 1-minute minimum: clear the punch, log nothing.
     if (now.getTime() - punch.clockInAt.toDate().getTime() < 60 * 1000) {
       tx.delete(punchRef);
-      return { discarded: true, hours: 0, entryId: null, extraEntryId: null, capped: false, punchEmail: punch.userEmail };
+      return { discarded: true, hours: 0, loggedHours: 0, entryId: null, extraEntryId: null, capped: false, punchEmail: punch.userEmail };
     }
 
     // Profile gone: identify the user from the punch. No schedule, so no cap.
@@ -432,6 +432,7 @@ exports.adminClockOut = onCall({ cors: ALLOWED_ORIGINS }, async (request) => {
     ok: true,
     discarded: result.discarded,
     hours: result.hours,
+    loggedHours: result.loggedHours,
     entryId: result.entryId,
     extraEntryId: result.extraEntryId,
     capped: result.capped

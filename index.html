@@ -2820,16 +2820,21 @@
             const clockInMs = (p) => toDateOrNull(p.clockInAt)?.getTime() ?? currentTime.getTime();
             const sorted = [...punches].sort((a, b) => clockInMs(a) - clockInMs(b));
 
-            // Past today's scheduled end (if the user has one) or a long-shift fallback.
-            // Evaluated in office time (CT) to match the server-side cap.
+            // Past the scheduled end (if the user has one) or a long-shift fallback.
+            // Mirrors the server cap: weekday from the punch's clockInDate (CT date of
+            // clock-in as fallback); start/end are CT hour decimals, and an end at or
+            // before the start (shift crossed midnight) becomes start + elapsed hours.
             const isOverdue = (p) => {
                 const u = usersById[p.uid];
-                const officeDate = dateStringInZone(toDateOrNull(p.clockInAt) || currentTime, OFFICE_TZ_DISPLAY);
-                const shift = u && u.schedule ? getScheduleForToday(u.schedule, new Date(officeDate + 'T00:00:00')) : null;
+                const clockIn = toDateOrNull(p.clockInAt) || currentTime;
+                const anchorDate = p.clockInDate || dateStringInZone(clockIn, OFFICE_TZ_DISPLAY);
+                const shift = u && u.schedule ? getScheduleForToday(u.schedule, new Date(anchorDate + 'T00:00:00')) : null;
                 if (shift) {
-                    const nowDecimal = hourDecimalInZone(currentTime, OFFICE_TZ_DISPLAY);
-                    const sameDay = officeDate === dateStringInZone(currentTime, OFFICE_TZ_DISPLAY);
-                    return !sameDay || nowDecimal > timeToDecimal(shift.end);
+                    const elapsedHours = (currentTime.getTime() - clockIn.getTime()) / 3600000;
+                    const startDecimal = hourDecimalInZone(clockIn, OFFICE_TZ_DISPLAY);
+                    let endDecimal = hourDecimalInZone(currentTime, OFFICE_TZ_DISPLAY);
+                    if (endDecimal <= startDecimal) endDecimal = startDecimal + elapsedHours;
+                    return endDecimal > timeToDecimal(shift.end);
                 }
                 return currentTime.getTime() - clockInMs(p) > LIVE_LONG_SHIFT_HOURS * 3600 * 1000;
             };
@@ -2846,7 +2851,7 @@
                         type: 'success',
                         text: result.discarded
                             ? `Stopped ${name} — shift under 1 minute, nothing logged.`
-                            : `Stopped ${name} — ${formatHoursWorked(result.hours)} logged (pending approval).`
+                            : `Stopped ${name} — ${formatHoursWorked(result.loggedHours)} logged${result.capped ? ' (clamped to scheduled end)' : ''} (pending approval).`
                     });
                     setStopTarget(null);
                 } catch (err) {

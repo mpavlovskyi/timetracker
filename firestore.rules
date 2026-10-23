@@ -46,12 +46,15 @@ service cloud.firestore {
       // Admins: full control
       allow create, update, delete: if isAdmin();
 
-      // Users: manual entries only — source and autoClockOut must not be set.
+      // Users: manual entries only — source, autoClockOut and stoppedBy* must not be set.
       // Clock-source writes go through Cloud Functions (admin SDK).
       allow create: if isSignedIn()
         && request.resource.data.userId == request.auth.uid
         && !('source' in request.resource.data)
-        && !('autoClockOut' in request.resource.data);
+        && !('autoClockOut' in request.resource.data)
+        && !('stoppedByAdmin' in request.resource.data)
+        && !('stoppedByUid' in request.resource.data)
+        && !('stoppedByName' in request.resource.data);
 
       // Users delete their own non-approved entries (matches dashboard feature).
       allow delete: if isSignedIn()

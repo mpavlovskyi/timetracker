@@ -119,3 +119,23 @@ test('non-boolean truthy extendedTime is treated as not extended', () => {
     { role: 'primary', data: { ...base, startTime: 9, endTime: 17, hours: 8, capped: true } }
   ]);
 });
+
+test('loggedHours sums entry hours, not raw elapsed time', () => {
+  const capped = buildClockOutEntries({
+    startDecimal: 9, endDecimal: 21, totalHours: 12,
+    capDecimal: 17, extendedTime: false, entryBase: base
+  });
+  assert.strictEqual(capped.loggedHours, 8);
+
+  const split = buildClockOutEntries({
+    startDecimal: 9, endDecimal: 19, totalHours: 10,
+    capDecimal: 17, extendedTime: true, entryBase: base
+  });
+  assert.strictEqual(split.loggedHours, 10);
+
+  const normal = buildClockOutEntries({
+    startDecimal: 9, endDecimal: 12.5, totalHours: 3.5,
+    capDecimal: 17, extendedTime: false, entryBase: base
+  });
+  assert.strictEqual(normal.loggedHours, 3.5);
+});
