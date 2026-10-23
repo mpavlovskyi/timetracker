@@ -1265,7 +1265,7 @@
     <div id="root"></div>
 
     <script type="text/babel" data-presets="react">
-        const { useState, useEffect } = React;
+        const { useState, useEffect, useRef } = React;
 
         // ============================================
         // FIREBASE CONFIGURATION
@@ -2430,6 +2430,8 @@
             const [clockInError, setClockInError] = useState('');
             const [schedule, setSchedule] = useState(currentUser.schedule || null);
             const [capEnabled, setCapEnabled] = useState(currentUser.scheduleCapEnabled === true);
+            const selfClockOutRef = useRef(false);
+            const hadPunchRef = useRef(false);
 
             useEffect(() => {
                 const timer = setInterval(() => setCurrentTime(new Date()), 1000);
@@ -2439,7 +2441,15 @@
             useEffect(() => {
                 const unsub = db.collection('activePunches').doc(currentUser.uid)
                     .onSnapshot(doc => {
-                        setActivePunch(doc.exists ? doc.data() : null);
+                        const present = doc.exists;
+                        // Punch vanished without this tab clocking out → an admin stopped it.
+                        if (hadPunchRef.current && !present && !selfClockOutRef.current) {
+                            setShowClockOutModal(false);
+                            setClockOutError('');
+                            setPunchMessage({ type: 'info', text: 'Your shift was stopped by an admin.' });
+                        }
+                        hadPunchRef.current = present;
+                        setActivePunch(present ? doc.data() : null);
                     }, err => {
                         console.error('activePunch listener error:', err);
                     });
@@ -2542,6 +2552,7 @@
                 if (punchLoading || !activePunch) return;
                 setPunchLoading(true);
                 setClockOutError('');
+                selfClockOutRef.current = true;
                 try {
                     const result = await runPunchCall('clockOut', { extendedTime, notes });
                     let text;
@@ -2557,9 +2568,15 @@
                     setShowClockOutModal(false);
                 } catch (err) {
                     console.error('Clock out failed:', err);
-                    // Error renders inside the modal so the typed note is preserved.
-                    setClockOutError(err.userMessage || 'Failed to clock out. Please try again.');
+                    if (err.detailCode === 'NOT_CLOCKED_IN') {
+                        setShowClockOutModal(false);
+                        setPunchMessage({ type: 'info', text: 'Your shift was already stopped by an admin.' });
+                    } else {
+                        // Error renders inside the modal so the typed note is preserved.
+                        setClockOutError(err.userMessage || 'Failed to clock out. Please try again.');
+                    }
                 } finally {
+                    selfClockOutRef.current = false;
                     setPunchLoading(false);
                 }
             };
@@ -2647,7 +2664,7 @@
 
                                     {punchMessage && (
                                         <div className={`alert ${punchMessage.type}`} style={{ marginTop: '1.25rem' }}>
-                                            <Icon name={punchMessage.type === 'success' ? 'checkCircle' : 'alertCircle'} size={20} />
+                                            <Icon name={punchMessage.type === 'success' ? 'checkCircle' : punchMessage.type === 'info' ? 'info' : 'alertCircle'} size={20} />
                                             {punchMessage.text}
                                         </div>
                                     )}
