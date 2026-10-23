@@ -340,6 +340,88 @@ exports.clockOut = onCall({ cors: ALLOWED_ORIGINS }, async (request) => {
 });
 
 // ---------------------------------------------------------------------------
+// Admin-only: stops another user's running clock. The shift is saved as a
+// normal pending entry ending now, tagged stoppedByAdmin. Shares writeClockOut
+// with clockOut so cap behaviour is identical (extendedTime is never applied).
+// ---------------------------------------------------------------------------
+
+exports.adminClockOut = onCall({ cors: ALLOWED_ORIGINS }, async (request) => {
+  if (!request.auth) {
+    throw new HttpsError('unauthenticated', 'Sign in required.');
+  }
+
+  const caller = await getUserDoc(request.auth.uid);
+  if (caller.role !== 'admin') {
+    throw new HttpsError('permission-denied', 'Admin access required.');
+  }
+
+  const data = request.data || {};
+  const targetUid = typeof data.targetUid === 'string' ? data.targetUid.trim() : '';
+  if (!targetUid) {
+    throw new HttpsError('invalid-argument', 'A target user id is required.');
+  }
+  const reason = typeof data.reason === 'string' ? data.reason.trim() : '';
+  if (reason.length < 3 || reason.length > 2000) {
+    throw new HttpsError('invalid-argument', 'Please give a reason (3–2000 characters).');
+  }
+
+  const target = await getUserDoc(targetUid);
+  const callerName = `${caller.firstName || ''} ${caller.lastName || ''}`.trim() || caller.email || 'admin';
+  const punchRef = db.collection('activePunches').doc(targetUid);
+
+  const result = await db.runTransaction(async (tx) => {
+    const punchSnap = await tx.get(punchRef);
+    if (!punchSnap.exists) {
+      throw new HttpsError('failed-precondition', 'That user is not clocked in.', { code: 'NOT_CLOCKED_IN' });
+    }
+    const punch = punchSnap.data();
+    const now = new Date();
+
+    // Under the 1-minute minimum: clear the punch, log nothing.
+    if (now.getTime() - punch.clockInAt.toDate().getTime() < 60 * 1000) {
+      tx.delete(punchRef);
+      return { discarded: true, hours: 0, entryId: null, extraEntryId: null, capped: false };
+    }
+
+    const written = writeClockOut(tx, {
+      punchRef, punch, user: target, now,
+      notes: `[Stopped by admin ${callerName}] ${reason}`,
+      extendedTime: false,
+      extraFields: {
+        stoppedByAdmin: true,
+        stoppedByUid: request.auth.uid,
+        stoppedByName: callerName,
+        stoppedAt: admin.firestore.Timestamp.fromDate(now)
+      },
+      // No client payload: clock-out timezone falls back to the punch's.
+      data: {}
+    });
+    return { discarded: false, ...written };
+  });
+
+  await logAdminAction({
+    action: 'adminClockOut',
+    callerUid: request.auth.uid,
+    callerEmail: caller.email || null,
+    targetUid,
+    targetEmail: target.email || null,
+    hours: result.hours,
+    entryId: result.entryId,
+    extraEntryId: result.extraEntryId,
+    discarded: result.discarded,
+    reason
+  });
+
+  return {
+    ok: true,
+    discarded: result.discarded,
+    hours: result.hours,
+    entryId: result.entryId,
+    capped: result.capped
+  };
+});
+
+// ---------------------------------------------------------------------------
 // Admin-only: generates a Firebase password reset link for another user, so an
 // admin can hand it to someone who can't reset their own password. The link is
 // generated against the target's Firebase Auth email (the source of truth for
