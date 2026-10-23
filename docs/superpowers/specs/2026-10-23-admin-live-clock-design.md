@@ -93,12 +93,14 @@ returning `{ hours, entryId, extraEntryId, capped, extraLogged }`.
 
 - `ClockInOut` already listens to its own `activePunches` doc, so the page flips to
   clocked-out automatically when an admin stops it.
-- If the punch disappears while the user did not initiate a clock-out, show a
-  one-time notice: "Your shift was stopped by an admin." (detected by: punch went
-  from present → absent while no local clock-out request was in flight).
-- If the user submits their clock-out modal after an admin stop, `clockOut` returns
-  `NOT_CLOCKED_IN`; show "Your shift was already stopped by an admin." instead of
-  a generic error, and close the modal.
+- When an admin stops the clock, show a one-time notice: "Your shift was stopped
+  by <admin name>." Detected via a server marker: `adminClockOut` writes
+  `users/{uid}.lastAdminStop = { at, byName }` in the same transaction (only if
+  the profile exists); `ClockInOut`'s own users-doc listener shows the notice when
+  `lastAdminStop.at` becomes newer than the value seen on its first snapshot.
+- If the user submits their clock-out modal after the punch is gone, `clockOut`
+  returns `NOT_CLOCKED_IN`; show the neutral "You are already clocked out." and
+  close the modal (the marker listener supplies the admin notice when applicable).
 
 ## 4. Approve Time / entry display
 

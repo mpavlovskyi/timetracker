@@ -2430,8 +2430,7 @@
             const [clockInError, setClockInError] = useState('');
             const [schedule, setSchedule] = useState(currentUser.schedule || null);
             const [capEnabled, setCapEnabled] = useState(currentUser.scheduleCapEnabled === true);
-            const selfClockOutRef = useRef(false);
-            const hadPunchRef = useRef(false);
+            const adminStopBaselineRef = useRef(undefined);
 
             useEffect(() => {
                 const timer = setInterval(() => setCurrentTime(new Date()), 1000);
@@ -2441,15 +2440,7 @@
             useEffect(() => {
                 const unsub = db.collection('activePunches').doc(currentUser.uid)
                     .onSnapshot(doc => {
-                        const present = doc.exists;
-                        // Punch vanished without this tab clocking out → an admin stopped it.
-                        if (hadPunchRef.current && !present && !selfClockOutRef.current) {
-                            setShowClockOutModal(false);
-                            setClockOutError('');
-                            setPunchMessage({ type: 'info', text: 'Your shift was stopped by an admin.' });
-                        }
-                        hadPunchRef.current = present;
-                        setActivePunch(present ? doc.data() : null);
+                        setActivePunch(doc.exists ? doc.data() : null);
                     }, err => {
                         console.error('activePunch listener error:', err);
                     });
@@ -2457,11 +2448,24 @@
             }, [currentUser.uid]);
 
             useEffect(() => {
+                // undefined = no snapshot yet; the first snapshot only records the baseline.
+                adminStopBaselineRef.current = undefined;
                 const unsub = db.collection('users').doc(currentUser.uid).onSnapshot(doc => {
+                    const d = doc.exists ? doc.data() : {};
                     if (doc.exists) {
-                        const d = doc.data();
                         setSchedule(d.schedule || null);
                         setCapEnabled(d.scheduleCapEnabled === true);
+                    }
+                    // Server writes lastAdminStop when an admin stops this user's clock.
+                    const stop = d.lastAdminStop;
+                    const stopMs = stop && stop.at && typeof stop.at.toMillis === 'function' ? stop.at.toMillis() : null;
+                    if (adminStopBaselineRef.current === undefined) {
+                        adminStopBaselineRef.current = stopMs;
+                    } else if (stopMs !== null && (adminStopBaselineRef.current === null || stopMs > adminStopBaselineRef.current)) {
+                        adminStopBaselineRef.current = stopMs;
+                        setShowClockOutModal(false);
+                        setClockOutError('');
+                        setPunchMessage({ type: 'info', text: `Your shift was stopped by ${stop.byName || 'an admin'}.` });
                     }
                 });
                 return () => unsub();
@@ -2552,7 +2556,6 @@
                 if (punchLoading || !activePunch) return;
                 setPunchLoading(true);
                 setClockOutError('');
-                selfClockOutRef.current = true;
                 try {
                     const result = await runPunchCall('clockOut', { extendedTime, notes });
                     let text;
@@ -2570,13 +2573,12 @@
                     console.error('Clock out failed:', err);
                     if (err.detailCode === 'NOT_CLOCKED_IN') {
                         setShowClockOutModal(false);
-                        setPunchMessage({ type: 'info', text: 'Your shift was already stopped by an admin.' });
+                        setPunchMessage({ type: 'info', text: 'You are already clocked out.' });
                     } else {
                         // Error renders inside the modal so the typed note is preserved.
                         setClockOutError(err.userMessage || 'Failed to clock out. Please try again.');
                     }
                 } finally {
-                    selfClockOutRef.current = false;
                     setPunchLoading(false);
                 }
             };

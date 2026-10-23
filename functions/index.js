@@ -380,6 +380,14 @@ exports.adminClockOut = onCall({ cors: ALLOWED_ORIGINS }, async (request) => {
     const punch = punchSnap.data();
     const now = new Date();
 
+    // Marker the employee's client listens to for the "stopped by admin" notice.
+    // Skipped when the profile is gone so no users doc is created.
+    if (targetProfile) {
+      tx.set(db.collection('users').doc(targetUid), {
+        lastAdminStop: { at: admin.firestore.Timestamp.fromDate(now), byName: callerName }
+      }, { merge: true });
+    }
+
     // Under the 1-minute minimum: clear the punch, log nothing.
     if (now.getTime() - punch.clockInAt.toDate().getTime() < 60 * 1000) {
       tx.delete(punchRef);
