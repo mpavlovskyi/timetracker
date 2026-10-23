@@ -23,7 +23,34 @@ test('within cap: single normal entry', () => {
     capDecimal: 17, extendedTime: false, entryBase: base
   });
   assert.strictEqual(out.capped, false);
-  assert.deepStrictEqual(out.entries[0].data.hours, 7);
+  assert.strictEqual(out.extraLogged, false);
+  assert.deepStrictEqual(out.entries, [
+    { role: 'primary', data: { ...base, startTime: 9, endTime: 16, hours: 7 } }
+  ]);
+});
+
+test('end exactly at cap: not past cap, normal entry', () => {
+  const out = buildClockOutEntries({
+    startDecimal: 9, endDecimal: 17, totalHours: 8,
+    capDecimal: 17, extendedTime: false, entryBase: base
+  });
+  assert.strictEqual(out.capped, false);
+  assert.strictEqual(out.extraLogged, false);
+  assert.deepStrictEqual(out.entries, [
+    { role: 'primary', data: { ...base, startTime: 9, endTime: 17, hours: 8 } }
+  ]);
+});
+
+test('capDecimal undefined: treated as no cap', () => {
+  const out = buildClockOutEntries({
+    startDecimal: 9, endDecimal: 21, totalHours: 12,
+    capDecimal: undefined, extendedTime: false, entryBase: base
+  });
+  assert.strictEqual(out.capped, false);
+  assert.strictEqual(out.extraLogged, false);
+  assert.deepStrictEqual(out.entries, [
+    { role: 'primary', data: { ...base, startTime: 9, endTime: 21, hours: 12 } }
+  ]);
 });
 
 test('past cap, not extended: clamp to cap, capped flag', () => {
@@ -66,5 +93,29 @@ test('past cap, extended, started after cap: extra entry only', () => {
   });
   assert.deepStrictEqual(out.entries, [
     { role: 'extra', data: { ...base, startTime: 18, endTime: 20, hours: 2, isExtraTime: true } }
+  ]);
+});
+
+test('capDecimal 0 (midnight) is a real cap: extended overnight shift is all extra', () => {
+  const out = buildClockOutEntries({
+    startDecimal: 23, endDecimal: 25, totalHours: 2,
+    capDecimal: 0, extendedTime: true, entryBase: base
+  });
+  assert.strictEqual(out.capped, false);
+  assert.strictEqual(out.extraLogged, true);
+  assert.deepStrictEqual(out.entries, [
+    { role: 'extra', data: { ...base, startTime: 23, endTime: 25, hours: 2, isExtraTime: true } }
+  ]);
+});
+
+test('non-boolean truthy extendedTime is treated as not extended', () => {
+  const out = buildClockOutEntries({
+    startDecimal: 9, endDecimal: 21, totalHours: 12,
+    capDecimal: 17, extendedTime: 'yes', entryBase: base
+  });
+  assert.strictEqual(out.capped, true);
+  assert.strictEqual(out.extraLogged, false);
+  assert.deepStrictEqual(out.entries, [
+    { role: 'primary', data: { ...base, startTime: 9, endTime: 17, hours: 8, capped: true } }
   ]);
 });

@@ -357,15 +357,18 @@ exports.adminClockOut = onCall({ cors: ALLOWED_ORIGINS }, async (request) => {
 
   const data = request.data || {};
   const targetUid = typeof data.targetUid === 'string' ? data.targetUid.trim() : '';
-  if (!targetUid) {
-    throw new HttpsError('invalid-argument', 'A target user id is required.');
+  if (!targetUid || targetUid.includes('/') || targetUid.length > 128) {
+    throw new HttpsError('invalid-argument', 'A valid target user id is required.');
   }
   const reason = typeof data.reason === 'string' ? data.reason.trim() : '';
   if (reason.length < 3 || reason.length > 2000) {
     throw new HttpsError('invalid-argument', 'Please give a reason (3–2000 characters).');
   }
 
-  const target = await getUserDoc(targetUid);
+  // Read the profile directly (not getUserDoc): a deleted profile must not block
+  // stopping a still-running clock. The fallback is built from the punch below.
+  const targetSnap = await db.collection('users').doc(targetUid).get();
+  const targetProfile = targetSnap.exists ? { uid: targetUid, ...targetSnap.data() } : null;
   const callerName = `${caller.firstName || ''} ${caller.lastName || ''}`.trim() || caller.email || 'admin';
   const punchRef = db.collection('activePunches').doc(targetUid);
 
@@ -380,8 +383,13 @@ exports.adminClockOut = onCall({ cors: ALLOWED_ORIGINS }, async (request) => {
     // Under the 1-minute minimum: clear the punch, log nothing.
     if (now.getTime() - punch.clockInAt.toDate().getTime() < 60 * 1000) {
       tx.delete(punchRef);
-      return { discarded: true, hours: 0, entryId: null, extraEntryId: null, capped: false };
+      return { discarded: true, hours: 0, entryId: null, extraEntryId: null, capped: false, punchEmail: punch.userEmail };
     }
+
+    // Profile gone: identify the user from the punch. No schedule, so no cap.
+    const target = targetProfile || {
+      uid: targetUid, email: punch.userEmail, firstName: punch.userName, lastName: ''
+    };
 
     const written = writeClockOut(tx, {
       punchRef, punch, user: target, now,
@@ -396,7 +404,7 @@ exports.adminClockOut = onCall({ cors: ALLOWED_ORIGINS }, async (request) => {
       // No client payload: clock-out timezone falls back to the punch's.
       data: {}
     });
-    return { discarded: false, ...written };
+    return { discarded: false, ...written, punchEmail: punch.userEmail };
   });
 
   await logAdminAction({
@@ -404,7 +412,7 @@ exports.adminClockOut = onCall({ cors: ALLOWED_ORIGINS }, async (request) => {
     callerUid: request.auth.uid,
     callerEmail: caller.email || null,
     targetUid,
-    targetEmail: target.email || null,
+    targetEmail: (targetProfile && targetProfile.email) || result.punchEmail || null,
     hours: result.hours,
     entryId: result.entryId,
     extraEntryId: result.extraEntryId,
@@ -417,6 +425,7 @@ exports.adminClockOut = onCall({ cors: ALLOWED_ORIGINS }, async (request) => {
     discarded: result.discarded,
     hours: result.hours,
     entryId: result.entryId,
+    extraEntryId: result.extraEntryId,
     capped: result.capped
   };
 });

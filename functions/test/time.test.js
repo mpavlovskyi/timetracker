@@ -13,6 +13,11 @@ test('timeDecimalInTz converts UTC instant to Chicago decimal (CDT)', () => {
   assert.strictEqual(timeDecimalInTz(new Date('2026-07-01T14:30:00Z'), TZ), 9.5);
 });
 
+test('timeDecimalInTz converts UTC instant to Chicago decimal (CST)', () => {
+  // 2026-01-15T15:30:00Z = 09:30 CST (UTC-6)
+  assert.strictEqual(timeDecimalInTz(new Date('2026-01-15T15:30:00Z'), TZ), 9.5);
+});
+
 test('localDateStringInTz returns Chicago date across UTC midnight', () => {
   // 2026-07-02T03:00:00Z = 2026-07-01 22:00 CDT
   assert.strictEqual(localDateStringInTz(new Date('2026-07-02T03:00:00Z'), TZ), '2026-07-01');
@@ -30,6 +35,11 @@ test('getScheduleEndForDate picks the weekday end', () => {
   assert.strictEqual(getScheduleEndForDate(schedule, '2026-07-01'), 17); // Wednesday
   assert.strictEqual(getScheduleEndForDate(schedule, '2026-07-02'), null); // Thursday
   assert.strictEqual(getScheduleEndForDate(null, '2026-07-01'), null);
+});
+
+test('getScheduleEndForDate returns null for missing or malformed end', () => {
+  assert.strictEqual(getScheduleEndForDate({ wednesday: { start: '09:00' } }, '2026-07-01'), null);
+  assert.strictEqual(getScheduleEndForDate({ wednesday: { start: '09:00', end: 'xx' } }, '2026-07-01'), null);
 });
 
 test('shiftDecimals computes start/end/total for a same-day shift', () => {

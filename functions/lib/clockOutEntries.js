@@ -4,7 +4,9 @@
  * Decides which timeEntries a clock-out produces. Pure: no Firestore.
  * Returns { entries: [{ role: 'primary'|'extra', data }], capped, extraLogged }.
  */
-function buildClockOutEntries({ startDecimal, endDecimal, totalHours, capDecimal, extendedTime, entryBase }) {
+function buildClockOutEntries({ startDecimal, endDecimal, totalHours, capDecimal, extendedTime: rawExtended, entryBase }) {
+  // Strict boolean: a truthy non-boolean must not take the split branch or leak into flags.
+  const extendedTime = rawExtended === true;
   const pastCap = capDecimal !== null && capDecimal !== undefined && endDecimal > capDecimal;
   const entries = [];
 
