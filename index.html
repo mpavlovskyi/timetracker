@@ -1367,6 +1367,19 @@
             }
         };
 
+        // YYYY-MM-DD of `date` in the given zone.
+        const dateStringInZone = (date, ianaZone) =>
+            new Intl.DateTimeFormat('en-CA', { year: 'numeric', month: '2-digit', day: '2-digit', timeZone: ianaZone }).format(date);
+
+        // Hour of day as a decimal (e.g. 17.5) of `date` in the given zone.
+        const hourDecimalInZone = (date, ianaZone) => {
+            const parts = new Intl.DateTimeFormat('en-US', {
+                hour: 'numeric', minute: 'numeric', hourCycle: 'h23', timeZone: ianaZone
+            }).formatToParts(date);
+            const get = (type) => Number((parts.find(x => x.type === type) || {}).value || 0);
+            return get('hour') + get('minute') / 60;
+        };
+
         // "Asia/Baghdad" -> "Baghdad"
         const zoneLabel = (zone) => zone ? zone.split('/').pop().replace(/_/g, ' ') : '';
 
@@ -2798,6 +2811,8 @@
                     const map = {};
                     snapshot.docs.forEach(doc => { map[doc.id] = doc.data(); });
                     setUsersById(map);
+                }, err => {
+                    console.error('users listener error:', err);
                 });
                 return () => { unsubPunches(); unsubUsers(); };
             }, []);
@@ -2806,13 +2821,14 @@
             const sorted = [...punches].sort((a, b) => clockInMs(a) - clockInMs(b));
 
             // Past today's scheduled end (if the user has one) or a long-shift fallback.
+            // Evaluated in office time (CT) to match the server-side cap.
             const isOverdue = (p) => {
                 const u = usersById[p.uid];
-                const anchor = p.clockInDate ? new Date(p.clockInDate + 'T00:00:00') : currentTime;
-                const shift = u && u.schedule ? getScheduleForToday(u.schedule, anchor) : null;
+                const officeDate = dateStringInZone(toDateOrNull(p.clockInAt) || currentTime, OFFICE_TZ_DISPLAY);
+                const shift = u && u.schedule ? getScheduleForToday(u.schedule, new Date(officeDate + 'T00:00:00')) : null;
                 if (shift) {
-                    const nowDecimal = currentTime.getHours() + currentTime.getMinutes() / 60;
-                    const sameDay = p.clockInDate === currentTime.toLocaleDateString('en-CA');
+                    const nowDecimal = hourDecimalInZone(currentTime, OFFICE_TZ_DISPLAY);
+                    const sameDay = officeDate === dateStringInZone(currentTime, OFFICE_TZ_DISPLAY);
                     return !sameDay || nowDecimal > timeToDecimal(shift.end);
                 }
                 return currentTime.getTime() - clockInMs(p) > LIVE_LONG_SHIFT_HOURS * 3600 * 1000;
@@ -2910,9 +2926,7 @@
                                                         )}
                                                     </td>
                                                     <td style={{ maxWidth: '280px' }}>
-                                                        <div title={p.plan || ''} style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                                                            {p.plan || '—'}
-                                                        </div>
+                                                        <NoteSnippet notes={p.plan} />
                                                     </td>
                                                     <td>
                                                         <button
