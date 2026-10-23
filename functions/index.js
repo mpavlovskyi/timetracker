@@ -170,6 +170,19 @@ async function logAttempt(entry) {
   }
 }
 
+// Audit trail for privileged admin actions (separate from clockLogs, which is
+// clock-event shaped). Never throws: a logging failure must not abort the action.
+async function logAdminAction(entry) {
+  try {
+    await db.collection('adminAuditLogs').add({
+      ...entry,
+      timestamp: admin.firestore.FieldValue.serverTimestamp()
+    });
+  } catch (err) {
+    console.error('Failed to write adminAuditLog:', err);
+  }
+}
+
 /**
  * Runs the two-layer location check.
  * Returns { ip, ipOk, distance } on success; throws HttpsError with `details.code`
@@ -407,55 +420,64 @@ exports.clockOut = onCall({ cors: ALLOWED_ORIGINS }, async (request) => {
 });
 
 // ---------------------------------------------------------------------------
-// TEMPORARY — remove after use.
-// Creates (or refreshes) a throwaway admin account so a developer who lacks
-// console access can sign in and smoke-test admin flows. Cleans up with the
-// same call passing { cleanup: true }. Delete this block + the function from
-// the project after you're done.
+// Admin-only: generates a Firebase password reset link for another user, so an
+// admin can hand it to someone who can't reset their own password. The link is
+// generated against the target's Firebase Auth email (the source of truth for
+// sign-in), not the copy stored on their Firestore profile.
 // ---------------------------------------------------------------------------
-const DEV_RESET_SECRET = 'b4f1a9c0-7e2d-4836-9c51-08af3d6e7b29';
-const DEV_ADMIN_EMAIL = 'temp-admin@timetracker.local';
 
-exports.devCreateTempAdmin = onCall({ cors: ALLOWED_ORIGINS }, async (request) => {
-  const { secret, cleanup } = request.data || {};
-  if (secret !== DEV_RESET_SECRET) {
-    throw new HttpsError('permission-denied', 'Invalid secret.');
+exports.adminGeneratePasswordResetLink = onCall({ cors: ALLOWED_ORIGINS }, async (request) => {
+  if (!request.auth) {
+    throw new HttpsError('unauthenticated', 'Sign in required.');
   }
 
-  if (cleanup) {
-    try {
-      const existing = await admin.auth().getUserByEmail(DEV_ADMIN_EMAIL);
-      await admin.auth().deleteUser(existing.uid);
-      await db.collection('users').doc(existing.uid).delete();
-      return { ok: true, action: 'cleanup', uid: existing.uid };
-    } catch (err) {
-      if (err.code === 'auth/user-not-found') return { ok: true, action: 'cleanup', note: 'no temp admin found' };
-      throw new HttpsError('internal', err.message);
-    }
+  const caller = await getUserDoc(request.auth.uid);
+  if (caller.role !== 'admin') {
+    throw new HttpsError('permission-denied', 'Admin access required.');
   }
 
-  const password = 'Temp-' + Math.random().toString(36).slice(2, 10) + '-' + Math.random().toString(36).slice(2, 6);
+  const data = request.data || {};
+  const targetUid = typeof data.targetUid === 'string' ? data.targetUid.trim() : '';
+  if (!targetUid) {
+    throw new HttpsError('invalid-argument', 'A target user id is required.');
+  }
+  // verifyOnly: confirm the Auth account and its canonical email without minting
+  // an oobCode — generating a second reset code would invalidate the first.
+  const verifyOnly = data.verifyOnly === true;
 
-  let userRecord;
+  // Confirms the profile exists (throws not-found otherwise) before hitting Auth.
+  await getUserDoc(targetUid);
+
   try {
-    userRecord = await admin.auth().createUser({ email: DEV_ADMIN_EMAIL, password });
-  } catch (err) {
-    if (err.code === 'auth/email-already-exists') {
-      userRecord = await admin.auth().getUserByEmail(DEV_ADMIN_EMAIL);
-      await admin.auth().updateUser(userRecord.uid, { password });
-    } else {
-      throw new HttpsError('internal', err.message);
+    const userRecord = await admin.auth().getUser(targetUid);
+    const link = verifyOnly ? null : await admin.auth().generatePasswordResetLink(userRecord.email);
+
+    await logAdminAction({
+      action: verifyOnly ? 'adminVerifyPasswordResetTarget' : 'adminGeneratePasswordResetLink',
+      callerUid: request.auth.uid,
+      callerEmail: caller.email || null,
+      targetUid,
+      targetEmail: userRecord.email || null
+    });
+
+    // An admin-initiated reset supersedes the forced temp-password change: that
+    // flag exists to push users off an admin-generated temp password, and leaving
+    // it true would make the employee change their password twice in a row.
+    try {
+      await db.collection('users').doc(targetUid).set({ requirePasswordChange: false }, { merge: true });
+    } catch (err) {
+      console.error('Failed to clear requirePasswordChange:', err);
     }
+
+    if (verifyOnly) {
+      return { ok: true, email: userRecord.email };
+    }
+    return { ok: true, link, email: userRecord.email };
+  } catch (err) {
+    if (err instanceof HttpsError) throw err;
+    if (err.code === 'auth/user-not-found') {
+      throw new HttpsError('not-found', 'No sign-in account found for that user.', { code: 'AUTH_ACCOUNT_MISSING' });
+    }
+    throw new HttpsError('internal', err.message);
   }
-
-  await db.collection('users').doc(userRecord.uid).set({
-    email: DEV_ADMIN_EMAIL,
-    username: 'tempadmin',
-    firstName: 'Temp',
-    lastName: 'Admin',
-    role: 'admin'
-  }, { merge: true });
-
-  return { ok: true, action: 'created', email: DEV_ADMIN_EMAIL, password, uid: userRecord.uid };
 });
-
