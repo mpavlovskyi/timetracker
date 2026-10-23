@@ -2845,7 +2845,7 @@
                 setStopLoading(true);
                 setStopError('');
                 try {
-                    const fn = functions.httpsCallable('adminClockOut');
+                    const fn = functions.httpsCallable('clockOut');
                     const result = (await fn({ targetUid: stopTarget.uid, reason })).data;
                     setMessage({
                         type: 'success',

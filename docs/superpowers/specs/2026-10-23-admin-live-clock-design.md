@@ -29,6 +29,16 @@ pending time entry ending at the moment the admin pressed Stop.
 
 ## 1. Backend — `functions/index.js`
 
+> **Routing note:** the admin stop is not deployed as its own callable. Deploying
+> a new function failed because the deployer lacks permission to set the public
+> Cloud Run invoker on new functions (updating existing ones works). The logic
+> lives in a plain `adminStopClock(request)` and is reached through the existing
+> `clockOut` callable whenever the payload has a `targetUid` key (admin role still
+> enforced; non-admins get `permission-denied`). The UI calls
+> `clockOut({ targetUid, reason })`. Split it back into `adminClockOut` once the
+> deployer has `roles/functions.admin`. References to `adminClockOut` below
+> describe this logic.
+
 ### Shared helper
 
 Extract the entry-building + commit portion of `clockOut` into

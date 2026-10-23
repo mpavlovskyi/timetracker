@@ -313,6 +313,10 @@ exports.clockOut = onCall({ cors: ALLOWED_ORIGINS }, async (request) => {
   }
   const uid = request.auth.uid;
   const data = request.data || {};
+  // Admin stop of another user's clock (see adminStopClock for why it lives here).
+  if (Object.prototype.hasOwnProperty.call(data, 'targetUid')) {
+    return adminStopClock(request);
+  }
   const extendedTime = data.extendedTime === true;
 
   const user = await getUserDoc(uid);
@@ -343,9 +347,15 @@ exports.clockOut = onCall({ cors: ALLOWED_ORIGINS }, async (request) => {
 // Admin-only: stops another user's running clock. The shift is saved as a
 // normal pending entry ending now, tagged stoppedByAdmin. Shares writeClockOut
 // with clockOut so cap behaviour is identical (extendedTime is never applied).
+//
+// Not its own callable: it's reached via clockOut when the payload carries
+// targetUid. New functions can't be made publicly invokable with the current
+// deploy permissions (setting the Cloud Run invoker fails), while updating the
+// existing clockOut works. Split this back into its own callable once the
+// deployer has roles/functions.admin.
 // ---------------------------------------------------------------------------
 
-exports.adminClockOut = onCall({ cors: ALLOWED_ORIGINS }, async (request) => {
+async function adminStopClock(request) {
   if (!request.auth) {
     throw new HttpsError('unauthenticated', 'Sign in required.');
   }
@@ -437,7 +447,7 @@ exports.adminClockOut = onCall({ cors: ALLOWED_ORIGINS }, async (request) => {
     extraEntryId: result.extraEntryId,
     capped: result.capped
   };
-});
+}
 
 // ---------------------------------------------------------------------------
 // Admin-only: generates a Firebase password reset link for another user, so an
